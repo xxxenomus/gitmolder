@@ -4,8 +4,8 @@
 local httpService = game:GetService("HttpService")
 local runService = game:GetService("RunService")
 
-local toolbar = plugin:CreateToolbar("Git Sync")
-local openButton = toolbar:CreateButton("Git Sync", "open github sync", "")
+local toolbar = plugin:CreateToolbar("Gitmolder")
+local openButton = toolbar:CreateButton("Gitmolder", "Open Gitmolder", "")
 
 local widgetInfo = DockWidgetPluginGuiInfo.new(
 	Enum.InitialDockState.Float,
@@ -26,7 +26,7 @@ local activeJobId = 0
 local runningJobId = 0
 
 local widget = plugin:CreateDockWidgetPluginGuiAsync("GitSyncWidget", widgetInfo)
-widget.Title = "Git Sync"
+widget.Title = "Gitmolder"
 widget.Enabled = false
 
 openButton.Click:Connect(function()

@@ -1,6 +1,6 @@
 # gitmolder, a ROBLOX Git Sync Plugin
 
-A Roblox Studio plugin that enables synchronization with GitHub repositories. Push and pull code directly from your Roblox game project to GitHub.
+A Roblox Studio plugin that enables synchronization with GitHub repositories. Push and pull code directly from your Roblox game project to GitHub. Perfect application if you want any sort of source control without Rojo and any sort of external code editor.
 
 ## Features
 
@@ -28,6 +28,3 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 3. Use the available buttons to:
    - **Push** - Upload your changes to GitHub
    - **Pull** - Download the latest changes from GitHub
-
-
-  
