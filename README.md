@@ -4,9 +4,9 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 
 ## Features
 
-- 🔗 **GitHub Integration** - Connect your Roblox projects to GitHub repositories
-- 📤 **Push to GitHub** - Sync your local changes to a remote GitHub repository
-- 📥 **Pull from GitHub** - Fetch the latest code from your repository
+-  **GitHub Integration** - Connect your Roblox projects to GitHub repositories
+-  **Push to GitHub** - Sync your local changes to a remote GitHub repository
+-  **Pull from GitHub** - Fetch the latest code from your repository
 
 ## Requirements
 
@@ -28,4 +28,5 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 3. Use the available buttons to:
    - **Push** - Upload your changes to GitHub
    - **Pull** - Download the latest changes from GitHub
+
 
