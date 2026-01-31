@@ -18,7 +18,7 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 )
 
 --timeouts
-local requestTimeoutSeconds = 25
+local requestTimeoutSeconds = 20
 local jobTimeoutSeconds = 180
 
 --job control
@@ -210,11 +210,26 @@ local function requestJson(url, method, headers, bodyTable)
 			Method = method,
 			Headers = headers,
 			Body = body,
+			Timeout = requestTimeoutSeconds, --hard timeout handled by roblox
 		})
 	end)
 
 	if not ok then
-		return { StatusCode = 0, Body = "" }, { message = tostring(res) }
+		return { Success = false, StatusCode = 0, Body = "" }, { message = tostring(res) }
+	end
+
+	--roblox gives Success flag
+	if res.Success == false then
+		local decodedFail
+		if res.Body and #res.Body > 0 then
+			local ok2, data = pcall(function()
+				return httpService:JSONDecode(res.Body)
+			end)
+			if ok2 then
+				decodedFail = data
+			end
+		end
+		return res, decodedFail or { message = "request failed" }
 	end
 
 	local decoded
@@ -231,22 +246,26 @@ local function requestJson(url, method, headers, bodyTable)
 end
 
 
+
 local function getBranchRef(owner, repo, branch, token)
 	local headers = makeHeaders(token, false)
 	local url = ("https://api.github.com/repos/%s/%s/branches/%s"):format(owner, repo, branch)
 
 	local res, data = requestJson(url, "GET", headers)
-	if res.StatusCode ~= 200 then
-		local msg = data and data.message or "bad response"
-		return nil, ("cant read branch ref: %s (%d)"):format(msg, res.StatusCode)
+
+	if not res.Success or res.StatusCode ~= 200 then
+		local msg = (data and data.message) or (res.StatusCode == 0 and "http error") or "bad response"
+		return nil, ("cant read branch ref: %s (%d)"):format(msg, res.StatusCode or 0)
 	end
 
-	if not data or not data.commit or not data.commit.sha then
+	local sha = data and data.commit and data.commit.sha
+	if not sha then
 		return nil, "cant read branch ref: missing commit sha"
 	end
 
-	return data.commit.sha
+	return sha
 end
+
 
 
 local function getCommitTreeSha(owner, repo, commitSha, token)
