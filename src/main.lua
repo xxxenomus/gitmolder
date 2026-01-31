@@ -198,42 +198,62 @@ local function makeHeaders(token, hasBody)
 
 	return headers
 end
+
+local function trim(s)
+	return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function requestRawWithTimeout(req, timeoutSeconds)
+	local done = false
+	local ok, resOrErr
+
+	task.spawn(function()
+		ok, resOrErr = pcall(function()
+			return httpService:RequestAsync(req)
+		end)
+		done = true
+	end)
+
+	local t0 = os.clock()
+	while not done do
+		if os.clock() - t0 >= timeoutSeconds then
+			return {
+				Success = false,
+				StatusCode = 408,
+				Body = "",
+			}
+		end
+		task.wait(0.05)
+	end
+
+	if not ok then
+		return {
+			Success = false,
+			StatusCode = 0,
+			Body = "",
+			BodyError = tostring(resOrErr),
+		}
+	end
+
+	return resOrErr
+end
+
+
 local function requestJson(url, method, headers, bodyTable)
 	local body
 	if bodyTable then
 		body = httpService:JSONEncode(bodyTable)
 	end
 
-	local ok, res = pcall(function()
-		return httpService:RequestAsync({
-			Url = url,
-			Method = method,
-			Headers = headers,
-			Body = body,
-			Timeout = requestTimeoutSeconds, --hard timeout handled by roblox
-		})
-	end)
-
-	if not ok then
-		return { Success = false, StatusCode = 0, Body = "" }, { message = tostring(res) }
-	end
-
-	--roblox gives Success flag
-	if res.Success == false then
-		local decodedFail
-		if res.Body and #res.Body > 0 then
-			local ok2, data = pcall(function()
-				return httpService:JSONDecode(res.Body)
-			end)
-			if ok2 then
-				decodedFail = data
-			end
-		end
-		return res, decodedFail or { message = "request failed" }
-	end
+	local res = requestRawWithTimeout({
+		Url = url,
+		Method = method,
+		Headers = headers,
+		Body = body,
+	}, requestTimeoutSeconds)
 
 	local decoded
-	if res.Body and #res.Body > 0 then
+	if res and res.Body and #res.Body > 0 then
 		local ok2, data = pcall(function()
 			return httpService:JSONDecode(res.Body)
 		end)
@@ -242,19 +262,29 @@ local function requestJson(url, method, headers, bodyTable)
 		end
 	end
 
+	if res.StatusCode == 0 and res.BodyError and not decoded then
+		decoded = { message = res.BodyError }
+	end
+
 	return res, decoded
 end
 
 
 
+
 local function getBranchRef(owner, repo, branch, token)
+	owner = trim(owner)
+	repo = trim(repo)
+	branch = trim(branch)
+	token = trim(token)
+
 	local headers = makeHeaders(token, false)
 	local url = ("https://api.github.com/repos/%s/%s/branches/%s"):format(owner, repo, branch)
 
 	local res, data = requestJson(url, "GET", headers)
 
 	if not res.Success or res.StatusCode ~= 200 then
-		local msg = (data and data.message) or (res.StatusCode == 0 and "http error") or "bad response"
+		local msg = (data and data.message) or "http failed"
 		return nil, ("cant read branch ref: %s (%d)"):format(msg, res.StatusCode or 0)
 	end
 
@@ -265,6 +295,7 @@ local function getBranchRef(owner, repo, branch, token)
 
 	return sha
 end
+
 
 
 
