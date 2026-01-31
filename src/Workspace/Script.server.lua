@@ -1,6 +1,6 @@
 --gitmolder (scripts only)
 --enable: game settings -> security -> allow http requests
---note: i rolled my own base64 cuz some studio builds dont have httpservice:base64encode
+--note: base64 + delta push included so it wont take 10 years every time
 
 local httpService = game:GetService("HttpService")
 local runService = game:GetService("RunService")
@@ -20,7 +20,7 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 
 --config ur timeouts here
 local requestTimeoutSeconds = 60
-local jobTimeoutSeconds = 300
+local jobTimeoutSeconds = 1800
 
 --job state
 local activeJobId = 0
@@ -40,8 +40,44 @@ local function jobCanceled(jobId)
 	return activeJobId ~= jobId
 end
 
---base64 (pure lua)
---base64 (chunk-safe, no huge string.byte ranges)
+--hashing so i can skip unchanged scripts
+local function fnv1a32(str)
+	local hash = 2166136261
+	for i = 1, #str do
+		hash = bit32.bxor(hash, string.byte(str, i))
+		hash = (hash * 16777619) % 4294967296
+	end
+	return hash
+end
+
+local function loadLastHashes()
+	local raw = plugin:GetSetting("gitLastHashes")
+	if type(raw) ~= "string" or raw == "" then
+		return {}
+	end
+
+	local ok, data = pcall(function()
+		return httpService:JSONDecode(raw)
+	end)
+
+	if ok and type(data) == "table" then
+		return data
+	end
+
+	return {}
+end
+
+local function saveLastHashes(hashMap)
+	local ok, encoded = pcall(function()
+		return httpService:JSONEncode(hashMap)
+	end)
+
+	if ok then
+		plugin:SetSetting("gitLastHashes", encoded)
+	end
+end
+
+--base64 (chunk-safe)
 local base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local base64Index = {}
 for i = 1, #base64Chars do
@@ -134,7 +170,6 @@ local function base64Decode(data)
 	return table.concat(out)
 end
 
-
 --dock widget
 local widget
 do
@@ -155,7 +190,7 @@ openButton.Click:Connect(function()
 	widget.Enabled = not widget.Enabled
 end)
 
---ui
+--ui root
 local root = Instance.new("Frame")
 root.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
 root.BorderSizePixel = 0
@@ -578,10 +613,14 @@ local function collectLuaSources(pathPrefix)
 			local ok, src = pcall(function()
 				return inst.Source
 			end)
+
 			if ok and src ~= nil then
 				local path = buildRepoPath(inst, pathPrefix)
 				if path then
-					out[path] = src
+					out[path] = {
+						source = src,
+						hash = fnv1a32(src),
+					}
 				end
 			end
 		end
@@ -656,16 +695,27 @@ local function commitAndPush(cfg, jobId)
 		return false, "fill owner/repo/branch/token first"
 	end
 
+	local lastHashes = loadLastHashes()
 	local scriptsMap = collectLuaSources(pathPrefix)
-	local fileCount = 0
-	for _ in pairs(scriptsMap) do
-		fileCount += 1
+
+	local totalCount = 0
+	local changedCount = 0
+	for path, data in pairs(scriptsMap) do
+		totalCount += 1
+		if lastHashes[path] ~= data.hash then
+			changedCount += 1
+		end
 	end
-	if fileCount == 0 then
+
+	if totalCount == 0 then
 		return false, "no scripts found"
 	end
 
-	statusLabel.Text = ("reading branch...\nfiles: %d"):format(fileCount)
+	if changedCount == 0 then
+		return true, ("no changes. %d scripts already up to date"):format(totalCount)
+	end
+
+	statusLabel.Text = ("reading branch...\nchanged: %d/%d"):format(changedCount, totalCount)
 
 	local branchCommitSha, err1 = getBranchRef(owner, repo, branch, token)
 	if not branchCommitSha then
@@ -686,15 +736,19 @@ local function commitAndPush(cfg, jobId)
 	local treeItems = {}
 	local done = 0
 
-	for path, src in pairs(scriptsMap) do
+	for path, data in pairs(scriptsMap) do
 		if jobCanceled(jobId) then
 			return false, "canceled"
 		end
 
-		done += 1
-		statusLabel.Text = ("pushing %d/%d\n%s"):format(done, fileCount, path)
+		if lastHashes[path] == data.hash then
+			continue
+		end
 
-		local blobSha, blobErr = createBlob(owner, repo, token, src)
+		done += 1
+		statusLabel.Text = ("uploading %d/%d\n%s"):format(done, changedCount, path)
+
+		local blobSha, blobErr = createBlob(owner, repo, token, data.source)
 		if not blobSha then
 			return false, blobErr
 		end
@@ -705,6 +759,10 @@ local function commitAndPush(cfg, jobId)
 			type = "blob",
 			sha = blobSha,
 		}
+	end
+
+	if #treeItems == 0 then
+		return true, ("no changes. %d scripts already up to date"):format(totalCount)
 	end
 
 	statusLabel.Text = "building tree..."
@@ -731,7 +789,12 @@ local function commitAndPush(cfg, jobId)
 		return false, err5
 	end
 
-	return true, ("done. committed %d files to %s/%s (%s)"):format(fileCount, owner, repo, branch)
+	for path, data in pairs(scriptsMap) do
+		lastHashes[path] = data.hash
+	end
+	saveLastHashes(lastHashes)
+
+	return true, ("done. pushed %d changed scripts (%d total)"):format(changedCount, totalCount)
 end
 
 local function pullAndApply(cfg, jobId)
