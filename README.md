@@ -28,3 +28,5 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 3. Use the available buttons to:
    - **Push** - Upload your changes to GitHub
    - **Pull** - Download the latest changes from GitHub
+
+   More features might be added later.
