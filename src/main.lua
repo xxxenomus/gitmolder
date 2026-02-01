@@ -523,9 +523,6 @@ local function doPush(cfg, jobId)
 	if not okDirty then return false, errDirty end
 
 	local cache = loadCache(cfg)
-	if next(cache) == nil then
-		return false, "please pull once to sync baseline"
-	end
 	local changed = {}
 	local cacheNext = {}
 
