@@ -11,7 +11,7 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 ## Requirements
 
 - **Roblox Studio** - The plugin is designed for Roblox Studio
-- **HTTP Requests Enabled** - Enable in Game Settings -> Security → Allow HTTP Requests
+- **HTTP Requests Enabled** - Enable in Game Settings -> Security -> Allow HTTP Requests
 - **GitHub Personal Access Token** - Required for API authentication
 
 ## Installation
@@ -29,4 +29,4 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
    - **Push** - Upload your changes to GitHub
    - **Pull** - Download the latest changes from GitHub
 
-   More features might be added later.
+   More features might be added later, including commiting before push and merge conflict handling.
