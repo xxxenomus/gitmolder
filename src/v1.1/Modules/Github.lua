@@ -2,6 +2,7 @@
 --//discord: xxxenomus
 
 local HttpService = game:GetService("HttpService")
+local Base64 = require(script.Parent.Base64)
 
 local GitHub = {}
 
@@ -106,6 +107,14 @@ local function requestRaw(url, token)
 	return res.Body, nil
 end
 
+local function encodePath(path)
+	local parts = {}
+	for part in path:gmatch("[^/]+") do
+		table.insert(parts, HttpService:UrlEncode(part))
+	end
+	return table.concat(parts, "/")
+end
+
 function GitHub.getRefCommitSha(owner, repo, branch, token)
 	local url = ("https://api.github.com/repos/%s/%s/git/ref/heads/%s"):format(owner, repo, branch)
 	local data, err = requestJson("GET", url, token, nil)
@@ -129,11 +138,15 @@ end
 
 --big speed win: batch all changed files into a single tree, then 1 commit, then update ref
 function GitHub.batchCommit(owner, repo, branch, token, message, baseTreeSha, parentCommitSha, treeEntries)
+	local timing = {}
+
+	local t0 = os.clock()
 	local treeUrl = ("https://api.github.com/repos/%s/%s/git/trees"):format(owner, repo)
 	local treeData, treeErr = requestJson("POST", treeUrl, token, {
 		base_tree = baseTreeSha,
 		tree = treeEntries,
 	})
+	timing.tree = os.clock() - t0
 	if not treeData then return nil, treeErr end
 
 	local newTreeSha = treeData.sha
@@ -144,30 +157,61 @@ function GitHub.batchCommit(owner, repo, branch, token, message, baseTreeSha, pa
 		return false, "no changes"
 	end
 
+	local t1 = os.clock()
 	local commitUrl = ("https://api.github.com/repos/%s/%s/git/commits"):format(owner, repo)
 	local commitData, commitErr = requestJson("POST", commitUrl, token, {
 		message = message,
 		tree = newTreeSha,
 		parents = { parentCommitSha },
 	})
+	timing.commit = os.clock() - t1
 	if not commitData then return nil, commitErr end
 
 	local newCommitSha = commitData.sha
 	if not newCommitSha then return nil, "no commit sha from github" end
 
+	local t2 = os.clock()
 	local refUrl = ("https://api.github.com/repos/%s/%s/git/refs/heads/%s"):format(owner, repo, branch)
 	local _, refErr = requestJson("PATCH", refUrl, token, {
 		sha = newCommitSha,
 		force = false,
 	})
+	timing.ref = os.clock() - t2
 	if refErr then return nil, refErr end
 
-	return true, ("commit %s"):format(newCommitSha:sub(1, 7))
+	return true, ("commit %s"):format(newCommitSha:sub(1, 7)), newCommitSha, newTreeSha, timing
 end
 
 function GitHub.downloadRaw(owner, repo, branch, path, token)
 	local url = ("https://raw.githubusercontent.com/%s/%s/%s/%s"):format(owner, repo, branch, path)
 	return requestRaw(url, token)
+end
+
+function GitHub.getFileSha(owner, repo, branch, path, token)
+	local encPath = encodePath(path)
+	local url = ("https://api.github.com/repos/%s/%s/contents/%s?ref=%s"):format(owner, repo, encPath, HttpService:UrlEncode(branch))
+	local data, err = requestJson("GET", url, token, nil)
+	if not data then return nil, err end
+	return data.sha or nil, nil
+end
+
+function GitHub.putFile(owner, repo, branch, token, path, message, content, sha)
+	local encPath = encodePath(path)
+	local url = ("https://api.github.com/repos/%s/%s/contents/%s"):format(owner, repo, encPath)
+	local body = {
+		message = message,
+		content = Base64.encode(content),
+		branch = branch,
+	}
+	if sha then
+		body.sha = sha
+	end
+
+	local data, err = requestJson("PUT", url, token, body)
+	if not data then return nil, nil, err end
+	local newFileSha = data.content and data.content.sha or nil
+	local commitSha = data.commit and data.commit.sha or nil
+	return newFileSha, commitSha, nil
 end
 
 return GitHub

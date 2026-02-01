@@ -486,6 +486,7 @@ local function refreshDirty(jobId)
 end
 
 local function doPush(cfg, jobId)
+	local tStart = os.clock()
 	if cfg.owner == "" or cfg.repo == "" or cfg.branch == "" then
 		return false, "fill owner/repo/branch"
 	end
@@ -519,10 +520,12 @@ local function doPush(cfg, jobId)
 		cacheNext[path] = entry
 	end
 
+	local meta = cache.__meta or {}
+	cacheNext.__meta = meta
+
 	for path, _ in pairs(sourceIndex.removed) do
 		cacheNext[path] = nil
 	end
-	sourceIndex.removed = {}
 
 	for inst, _ in pairs(sourceIndex.dirty) do
 		if inst and inst:IsDescendantOf(game) and inst:IsA("LuaSourceContainer") then
@@ -546,33 +549,134 @@ local function doPush(cfg, jobId)
 			end
 		end
 	end
-	sourceIndex.dirty = {}
-
 	if changedCount == 0 then
-		saveCache(cfg, cacheNext)
+		sourceIndex.dirty = {}
+		sourceIndex.removed = {}
 		return true, "no changes"
 	end
 
+	if changedCount == 1 and next(sourceIndex.removed) == nil then
+		local only = changed[1]
+		setStatus("pushing 1 file...", "progress")
+		local cached = getCacheEntry(cache, only.path)
+		local fileSha = cached and cached.sha or nil
+		local newFileSha, commitSha, err = GitHub.putFile(
+			cfg.owner,
+			cfg.repo,
+			cfg.branch,
+			cfg.token,
+			only.path,
+			cfg.msg,
+			only.content,
+			fileSha
+		)
+		if not newFileSha then
+			local sha = GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
+			if sha then
+				newFileSha, commitSha, err = GitHub.putFile(
+					cfg.owner,
+					cfg.repo,
+					cfg.branch,
+					cfg.token,
+					only.path,
+					cfg.msg,
+					only.content,
+					sha
+				)
+			end
+		end
+		if newFileSha then
+			setCacheEntry(cacheNext, only.path, Hash.fnv1a32(only.content), newFileSha)
+			meta.head = commitSha or meta.head
+			meta.tree = nil
+			cacheNext.__meta = meta
+			saveCache(cfg, cacheNext)
+			sourceIndex.dirty = {}
+			sourceIndex.removed = {}
+			local dt = os.clock() - tStart
+			return true, ("pushed %d files (commit %s) (%.1fs)"):format(changedCount, tostring(commitSha and commitSha:sub(1, 7) or "unknown"), dt)
+		elseif err then
+			return false, err
+		end
+	end
+
+	local function retry(attempts, fn)
+		local lastErr = nil
+		for i = 1, attempts do
+			local res, err = fn()
+			if res ~= nil then
+				return res, err
+			end
+			lastErr = err
+			task.wait(0.2 * i)
+		end
+		return nil, lastErr
+	end
+
+	if meta.head and meta.tree then
+		setStatus(("batch committing (%d changed, cached head)..."):format(changedCount), "progress")
+		local okFast, msgFast, newHead, newTree, timingFast = GitHub.batchCommit(
+			cfg.owner,
+			cfg.repo,
+			cfg.branch,
+			cfg.token,
+			cfg.msg,
+			meta.tree,
+			meta.head,
+			changed
+		)
+		if okFast == true then
+			meta.head = newHead or meta.head
+			meta.tree = newTree or meta.tree
+			cacheNext.__meta = meta
+			saveCache(cfg, cacheNext)
+			sourceIndex.dirty = {}
+			sourceIndex.removed = {}
+			local dt = os.clock() - tStart
+			local perf = ""
+			if timingFast and ((timingFast.tree or 0) + (timingFast.commit or 0) + (timingFast.ref or 0)) > 5 then
+				perf = (" [tree %.1fs, commit %.1fs, ref %.1fs]"):format(timingFast.tree or 0, timingFast.commit or 0, timingFast.ref or 0)
+			end
+			return true, ("pushed %d files (%s) (%.1fs)%s"):format(changedCount, tostring(msgFast), dt, perf)
+		elseif okFast == false then
+			return true, msgFast
+		elseif okFast == nil then
+			if tostring(msgFast):find("timeout", 1, true) then
+				return false, msgFast
+			end
+		end
+	end
+
 	setStatus(("getting head commit (%d changed)..."):format(changedCount), "progress")
-	local headCommitSha, err1 = GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
+	local headCommitSha, err1 = retry(1, function()
+		return GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
+	end)
 	if not headCommitSha then return false, err1 end
 	if isCanceled(jobId) then return false, "canceled" end
 
-	local baseTreeSha, err2 = GitHub.getCommitTreeSha(cfg.owner, cfg.repo, headCommitSha, cfg.token)
+	local baseTreeSha, err2 = retry(1, function()
+		return GitHub.getCommitTreeSha(cfg.owner, cfg.repo, headCommitSha, cfg.token)
+	end)
 	if not baseTreeSha then return false, err2 end
 	if isCanceled(jobId) then return false, "canceled" end
 
 	setStatus("batch committing...", "progress")
-	local ok, msgOrErr = GitHub.batchCommit(
-		cfg.owner,
-		cfg.repo,
-		cfg.branch,
-		cfg.token,
-		cfg.msg,
-		baseTreeSha,
-		headCommitSha,
-		changed
-	)
+	local ok, msgOrErr, newHead, newTree, timing = nil, nil, nil, nil, nil
+	for i = 1, 1 do
+		ok, msgOrErr, newHead, newTree, timing = GitHub.batchCommit(
+			cfg.owner,
+			cfg.repo,
+			cfg.branch,
+			cfg.token,
+			cfg.msg,
+			baseTreeSha,
+			headCommitSha,
+			changed
+		)
+		if ok ~= nil then
+			break
+		end
+	end
 
 	if ok == nil then
 		return false, msgOrErr
@@ -582,8 +686,18 @@ local function doPush(cfg, jobId)
 		return true, msgOrErr
 	end
 
+	meta.head = newHead or headCommitSha
+	meta.tree = newTree or baseTreeSha
+	cacheNext.__meta = meta
 	saveCache(cfg, cacheNext)
-	return true, ("pushed %d files (%s)"):format(changedCount, tostring(msgOrErr))
+	sourceIndex.dirty = {}
+	sourceIndex.removed = {}
+	local dt = os.clock() - tStart
+	local perf = ""
+	if timing and ((timing.tree or 0) + (timing.commit or 0) + (timing.ref or 0)) > 5 then
+		perf = (" [tree %.1fs, commit %.1fs, ref %.1fs]"):format(timing.tree or 0, timing.commit or 0, timing.ref or 0)
+	end
+	return true, ("pushed %d files (%s) (%.1fs)%s"):format(changedCount, tostring(msgOrErr), dt, perf)
 end
 
 local function runJob(fn)
