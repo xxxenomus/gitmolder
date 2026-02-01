@@ -29,4 +29,5 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
    - **Push** - Upload your changes to GitHub
    - **Pull** - Download the latest changes from GitHub
 
-   More features might be added later, including commiting before push and merge conflict handling.
+   
+More features might be added later, including commiting before push and merge conflict handling.
