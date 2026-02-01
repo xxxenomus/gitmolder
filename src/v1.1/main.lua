@@ -158,10 +158,10 @@ local function mkBtn(parent, text)
 	return btn
 end
 
-local pullBtn = mkBtn(primaryRow, "pull")
+local pushBtn = mkBtn(primaryRow, "push")
 local cancelBtn = mkBtn(cancelRow, "cancel")
 
-pullBtn.BackgroundColor3 = Color3.fromRGB(160, 70, 70)
+pushBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 85)
 
 local statusLbl = Instance.new("TextLabel")
 statusLbl.BackgroundTransparency = 1
@@ -251,8 +251,8 @@ local function setUiEnabled(guiObj, enabled)
 		guiObj.Active = enabled
 		guiObj.AutoButtonColor = enabled
 		if enabled then
-			if guiObj == pullBtn then
-				guiObj.BackgroundColor3 = Color3.fromRGB(160, 70, 70)
+			if guiObj == pushBtn then
+				guiObj.BackgroundColor3 = Color3.fromRGB(60, 140, 85)
 			else
 				guiObj.BackgroundColor3 = Color3.fromRGB(44, 44, 54)
 			end
@@ -271,7 +271,6 @@ end
 local function setBusy(state)
 	isBusy = state
 
-	setUiEnabled(pullBtn, not state)
 	setUiEnabled(cancelBtn, state)
 	setUiEnabled(ownerBox, not state)
 	setUiEnabled(repoBox, not state)
@@ -481,7 +480,7 @@ local function refreshDirty(jobId)
 	return true
 end
 
-local function doPull(cfg, jobId)
+local function doPush(cfg, jobId)
 	if cfg.owner == "" or cfg.repo == "" or cfg.branch == "" then
 		return false, "fill owner/repo/branch"
 	end
@@ -494,156 +493,86 @@ local function doPull(cfg, jobId)
 
 	saveUi(cfg)
 
-	setStatus("getting head commit...", "progress")
+	if (not sourceIndex.initialized) or (sourceIndex.prefix ~= (cfg.prefix or "")) then
+		local ok, err = rebuildIndex(cfg.prefix, jobId)
+		if not ok then return false, err end
+	end
+
+	local okDirty, errDirty = refreshDirty(jobId)
+	if not okDirty then return false, errDirty end
+
+	local cache = loadCache(cfg)
+	local changed = {}
+	local cacheNext = {}
+
+	local totalLocal = 0
+	local changedCount = 0
+
+	for _, data in pairs(sourceIndex.byInst) do
+		if data.path and data.source then
+			totalLocal += 1
+			local h = data.hash or Hash.fnv1a32(data.source)
+			local cached = getCacheEntry(cache, data.path)
+			local cachedHash = cached and cached.hash or nil
+			if cached and cachedHash == h then
+				setCacheEntry(cacheNext, data.path, h, cached.sha)
+			else
+				setCacheEntry(cacheNext, data.path, h, nil)
+			end
+			if cachedHash ~= h then
+			changedCount += 1
+			table.insert(changed, {
+				path = data.path,
+				mode = "100644",
+				type = "blob",
+				content = data.source,
+			})
+			end
+		end
+	end
+
+	--drop cache entries for stuff i deleted locally
+	for path, _ in pairs(cache) do
+		if cacheNext[path] == nil then
+			cacheNext[path] = nil
+		end
+	end
+
+	if changedCount == 0 then
+		return true, ("no changes (%d scripts scanned)"):format(totalLocal)
+	end
+
+	setStatus(("getting head commit (%d changed)..."):format(changedCount), "progress")
 	local headCommitSha, err1 = GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
 	if not headCommitSha then return false, err1 end
 	if isCanceled(jobId) then return false, "canceled" end
 
-	local treeSha, err2 = GitHub.getCommitTreeSha(cfg.owner, cfg.repo, headCommitSha, cfg.token)
-	if not treeSha then return false, err2 end
+	local baseTreeSha, err2 = GitHub.getCommitTreeSha(cfg.owner, cfg.repo, headCommitSha, cfg.token)
+	if not baseTreeSha then return false, err2 end
 	if isCanceled(jobId) then return false, "canceled" end
 
-	setStatus("listing files...", "progress")
-	local tree, err3 = GitHub.getTreeRecursive(cfg.owner, cfg.repo, treeSha, cfg.token)
-	if not tree then return false, err3 end
-	if isCanceled(jobId) then return false, "canceled" end
+	setStatus("batch committing...", "progress")
+	local ok, msgOrErr = GitHub.batchCommit(
+		cfg.owner,
+		cfg.repo,
+		cfg.branch,
+		cfg.token,
+		cfg.msg,
+		baseTreeSha,
+		headCommitSha,
+		changed
+	)
 
-	local prefix = cfg.prefix or ""
-	if prefix ~= "" and prefix:sub(-1) ~= "/" then prefix = prefix .. "/" end
-
-	local files = {}
-	for _, item in ipairs(tree) do
-		if item.type == "blob" and item.path:sub(-4) == ".lua" then
-			if prefix == "" or item.path:sub(1, #prefix) == prefix then
-				table.insert(files, { path = item.path, sha = item.sha })
-			end
-		end
+	if ok == nil then
+		return false, msgOrErr
 	end
 
-	if #files == 0 then
-		return false, "no lua files found"
-	end
-
-	local cache = loadCache(cfg)
-	local cacheNext = {}
-
-	local toDownload = {}
-	local skipped = 0
-	for _, item in ipairs(files) do
-		local cached = getCacheEntry(cache, item.path)
-		if cached and cached.sha and cached.sha == item.sha then
-			local inst = PathUtil.findScriptByPath(item.path, prefix)
-			if inst then
-				local ok, src = pcall(function() return inst.Source end)
-				if ok and type(src) == "string" and cached.hash and Hash.fnv1a32(src) == cached.hash then
-					setCacheEntry(cacheNext, item.path, cached.hash, cached.sha)
-					skipped += 1
-				else
-					table.insert(toDownload, item)
-				end
-			else
-				table.insert(toDownload, item)
-			end
-		else
-			table.insert(toDownload, item)
-		end
-	end
-
-	if skipped > 0 then
-		--quiet
-	end
-
-	setStatus(("downloading %d files (raw github)..."):format(#toDownload), "progress")
-
-	local function dl(item, idx, throttle)
-		if isCanceled(jobId) then return nil end
-		local body = nil
-		local lastErr = nil
-		for attempt = 1, 3 do
-			if throttle then throttle() end
-			local rawBody, err = GitHub.downloadRaw(cfg.owner, cfg.repo, cfg.branch, item.path, cfg.token)
-			if rawBody then
-				body = rawBody
-				lastErr = nil
-				break
-			end
-			lastErr = err or "download failed"
-			task.wait(0.15 * attempt)
-		end
-
-		if not body then
-			error(("download failed: %s (%s)"):format(item.path, tostring(lastErr)))
-		end
-
-		return { path = item.path, content = body, sha = item.sha }
-	end
-
-	local lastProgAt = 0
-	local function onProgress(done, total)
-		local now = os.clock()
-		if (now - lastProgAt) > 0.12 or done == total then
-			lastProgAt = now
-			setStatus(("downloading %d/%d..."):format(done, total), "progress")
-		end
-	end
-
-	local errors, results = Concurrent.run(toDownload, 6, dl, onProgress, function()
-		return isCanceled(jobId)
-	end)
-
-	if isCanceled(jobId) then return false, "canceled" end
-	if #errors > 0 then
-		return false, tostring(errors[1].err)
-	end
-	setStatus("applying to studio...", "progress")
-
-	local applied = 0
-	for i, item in ipairs(results) do
-		if isCanceled(jobId) then return false, "canceled" end
-		if item and item.path and item.content then
-			local rel = item.path
-			if prefix ~= "" then
-				rel = rel:sub(#prefix + 1)
-			end
-
-			local parts = {}
-			for p in rel:gmatch("[^/]+") do
-				table.insert(parts, p)
-			end
-
-			if #parts >= 2 then
-				local svc = PathUtil.getService(parts[1])
-				if svc then
-					local parent = svc
-					for i = 2, #parts - 1 do
-						parent = PathUtil.ensureFolder(parent, parts[i])
-					end
-
-					local fileName = parts[#parts]
-					local name, className = PathUtil.stripSuffix(fileName)
-					if name and className then
-						local scr = PathUtil.ensureScript(parent, name, className)
-						local newHash = Hash.fnv1a32(item.content)
-						local needsWrite = true
-						local ok, cur = pcall(function() return scr.Source end)
-						if ok and type(cur) == "string" then
-							if Hash.fnv1a32(cur) == newHash then
-								needsWrite = false
-							end
-						end
-						if needsWrite then
-							scr.Source = item.content
-						end
-						applied += 1
-						setCacheEntry(cacheNext, item.path, newHash, item.sha)
-					end
-				end
-			end
-		end
+	if ok == false then
+		return true, msgOrErr
 	end
 
 	saveCache(cfg, cacheNext)
-	return true, ("pulled %d files"):format(applied)
+	return true, ("pushed %d files (%s)"):format(changedCount, tostring(msgOrErr))
 end
 
 local function runJob(fn)
@@ -679,9 +608,10 @@ local function runJob(fn)
 	end)
 end
 
-pullBtn.MouseButton1Click:Connect(function()
-	runJob(doPull)
+pushBtn.MouseButton1Click:Connect(function()
+	runJob(doPush)
 end)
+
 
 --restore ui
 do

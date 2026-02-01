@@ -27,7 +27,7 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 2. Click **Gitmolder** in the toolbar to open the sync widget
 3. Use the available buttons:
    - **v1.0**: Push / Pull / Cancel
-   - **v1.1**: Pull / Cancel (push removed)
+   - **v1.1**: Push / Cancel (pull removed)
 
    
 More features might be added later, including commiting before push and merge conflict handling.
