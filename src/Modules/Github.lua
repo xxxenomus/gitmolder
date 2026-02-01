@@ -1,10 +1,13 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local HttpService = game:GetService("HttpService")
 
 local GitHub = {}
 
 local REQUEST_TIMEOUT = 30
 
-local function requestAsync(req, label)
+local function requestAsync(req)
 	local done = false
 	local res = nil
 	local err = nil
@@ -24,7 +27,7 @@ local function requestAsync(req, label)
 	local start = os.clock()
 	while not done do
 		if (os.clock() - start) > REQUEST_TIMEOUT then
-			return nil, ("timeout: %s"):format(label or "request")
+			return nil, "timeout"
 		end
 		task.wait(0.05)
 	end
@@ -57,7 +60,7 @@ local function requestJson(method, url, token, bodyTable)
 		req.Headers["Content-Type"] = "application/json"
 	end
 
-	local res, reqErr = requestAsync(req, method .. " " .. url)
+	local res, reqErr = requestAsync(req)
 	if not res then
 		return nil, reqErr
 	end
@@ -91,7 +94,7 @@ local function requestRaw(url, token)
 		Url = url,
 		Method = "GET",
 		Headers = headers,
-	}, "GET " .. url)
+	})
 
 	if not res then
 		return nil, reqErr
@@ -102,9 +105,6 @@ local function requestRaw(url, token)
 
 	return res.Body, nil
 end
-
---//script by xenomus
---//discord: xxxenomus
 
 function GitHub.getRefCommitSha(owner, repo, branch, token)
 	local url = ("https://api.github.com/repos/%s/%s/git/ref/heads/%s"):format(owner, repo, branch)
