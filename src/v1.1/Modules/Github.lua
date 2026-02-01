@@ -7,23 +7,49 @@ local Base64 = require(script.Parent.Base64)
 local GitHub = {}
 
 local function requestAsync(req)
-	local ok, result = pcall(function()
-		return HttpService:RequestAsync(req)
+	local thread = coroutine.running()
+	
+	local taskThread = task.spawn(function()
+		local ok, res = pcall(function()
+			return HttpService:RequestAsync(req)
+		end)
+		if coroutine.status(thread) == "suspended" then
+			task.spawn(thread, ok, res)
+		end
 	end)
+
+	local timeoutTask = task.delay(25, function()
+		task.cancel(taskThread)
+		if coroutine.status(thread) == "suspended" then
+			task.spawn(thread, false, "timeout")
+		end
+	end)
+
+	local ok, res = coroutine.yield()
+	if timeoutTask then task.cancel(timeoutTask) end
+
 	if not ok then
-		return nil, tostring(result)
+		return nil, tostring(res)
 	end
-	return result, nil
+
+	return res, nil
 end
 
 local function requestJson(method, url, token, bodyTable)
 	local headers = {
 		["Accept"] = "application/vnd.github+json",
 		["X-GitHub-Api-Version"] = "2022-11-28",
+		["Cache-Control"] = "no-cache",
 	}
 
 	if token and token ~= "" then
 		headers["Authorization"] = "Bearer " .. token
+	end
+
+	if url:find("?", 1, true) then
+		url = url .. "&_t=" .. HttpService:GenerateGUID(false)
+	else
+		url = url .. "?_t=" .. HttpService:GenerateGUID(false)
 	end
 
 	local req = {
@@ -61,10 +87,18 @@ local function requestJson(method, url, token, bodyTable)
 end
 
 local function requestRaw(url, token)
-	local headers = {}
+	local headers = {
+		["Cache-Control"] = "no-cache",
+	}
 
 	if token and token ~= "" then
 		headers["Authorization"] = "Bearer " .. token
+	end
+
+	if url:find("?", 1, true) then
+		url = url .. "&_t=" .. HttpService:GenerateGUID(false)
+	else
+		url = url .. "?_t=" .. HttpService:GenerateGUID(false)
 	end
 
 	local res, reqErr = requestAsync({

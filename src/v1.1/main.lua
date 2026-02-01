@@ -565,45 +565,77 @@ local function doPush(cfg, jobId)
 		return true, "no changes"
 	end
 
+	local function retry(attempts, fn)
+		local lastErr = nil
+		for i = 1, attempts do
+			if isCanceled(jobId) then return nil, "canceled" end
+			local res = {fn()}
+			if res[1] ~= nil then
+				return table.unpack(res)
+			end
+			lastErr = nil
+			for _, v in pairs(res) do
+				if type(v) == "string" then
+					lastErr = v
+					break
+				end
+			end
+			if lastErr and tostring(lastErr):find("timeout") then
+				task.wait(2)
+			else
+				task.wait(0.2 * i)
+			end
+		end
+		return nil, lastErr
+	end
+
 	if changedCount == 1 and next(sourceIndex.removed) == nil then
 		local only = changed[1]
 		setStatus("pushing 1 file...", "progress")
 		local cached = getCacheEntry(cache, only.path)
 		local fileSha = cached and cached.sha or nil
 		if not fileSha then
-			local sha, shaErr = GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
+			local sha, shaErr = retry(3, function()
+				return GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
+			end)
 			if sha then
 				fileSha = sha
 			elseif shaErr and not tostring(shaErr):find("http 404", 1, true) then
 				return false, shaErr
 			end
 		end
-		local newFileSha, commitSha, err, putDt = GitHub.putFile(
-			cfg.owner,
-			cfg.repo,
-			cfg.branch,
-			cfg.token,
-			only.path,
-			cfg.msg,
-			only.content,
-			fileSha
-		)
+		local newFileSha, commitSha, err, putDt = retry(3, function()
+			return GitHub.putFile(
+				cfg.owner,
+				cfg.repo,
+				cfg.branch,
+				cfg.token,
+				only.path,
+				cfg.msg,
+				only.content,
+				fileSha
+			)
+		end)
 		if not newFileSha then
 			if err and (err:find("http 409", 1, true) or err:find("http 422", 1, true) or err:find("sha", 1, true)) then
-				local sha, shaErr = GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
+				local sha, shaErr = retry(3, function()
+					return GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
+				end)
 				if not sha then
 					return false, shaErr or "failed to get file sha"
 				end
-				newFileSha, commitSha, err, putDt = GitHub.putFile(
-					cfg.owner,
-					cfg.repo,
-					cfg.branch,
-					cfg.token,
-					only.path,
-					cfg.msg,
-					only.content,
-					sha
-				)
+				newFileSha, commitSha, err, putDt = retry(3, function()
+					return GitHub.putFile(
+						cfg.owner,
+						cfg.repo,
+						cfg.branch,
+						cfg.token,
+						only.path,
+						cfg.msg,
+						only.content,
+						sha
+					)
+				end)
 			else
 				return false, err or "push failed"
 			end
@@ -627,19 +659,6 @@ local function doPush(cfg, jobId)
 		elseif err then
 			return false, err
 		end
-	end
-
-	local function retry(attempts, fn)
-		local lastErr = nil
-		for i = 1, attempts do
-			local res, err = fn()
-			if res ~= nil then
-				return res, err
-			end
-			lastErr = err
-			task.wait(0.2 * i)
-		end
-		return nil, lastErr
 	end
 
 	if meta.head and meta.tree then
@@ -678,13 +697,13 @@ local function doPush(cfg, jobId)
 	end
 
 	setStatus(("getting head commit (%d changed)..."):format(changedCount), "progress")
-	local headCommitSha, err1 = retry(1, function()
+	local headCommitSha, err1 = retry(3, function()
 		return GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
 	end)
 	if not headCommitSha then return false, err1 end
 	if isCanceled(jobId) then return false, "canceled" end
 
-	local baseTreeSha, err2 = retry(1, function()
+	local baseTreeSha, err2 = retry(3, function()
 		return GitHub.getCommitTreeSha(cfg.owner, cfg.repo, headCommitSha, cfg.token)
 	end)
 	if not baseTreeSha then return false, err2 end
@@ -692,7 +711,7 @@ local function doPush(cfg, jobId)
 
 	setStatus("batch committing...", "progress")
 	local ok, msgOrErr, newHead, newTree, timing = nil, nil, nil, nil, nil
-	for i = 1, 1 do
+	for i = 1, 3 do
 		ok, msgOrErr, newHead, newTree, timing = GitHub.batchCommit(
 			cfg.owner,
 			cfg.repo,
