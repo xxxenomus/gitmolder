@@ -15,6 +15,8 @@ local isBusy = false
 local currentJob = 0
 local wantedStatus = "ready"
 local wantedStatusColor = Color3.fromRGB(170, 170, 180)
+local lastPushDuration = 0
+local lastPutDuration = 0
 
 --ui
 local toolbar = plugin:CreateToolbar("Gitmolder")
@@ -424,6 +426,14 @@ local function ensureRootWatchers()
 end
 
 local function rebuildIndex(prefix, jobId)
+	--cleanup existing connections to prevent leaks
+	for _, conns in pairs(sourceIndex.conns) do
+		for _, c in ipairs(conns) do
+			c:Disconnect()
+		end
+	end
+	sourceIndex.conns = {}
+
 	sourceIndex.prefix = prefix or ""
 	sourceIndex.byInst = {}
 	sourceIndex.byPath = {}
@@ -560,7 +570,15 @@ local function doPush(cfg, jobId)
 		setStatus("pushing 1 file...", "progress")
 		local cached = getCacheEntry(cache, only.path)
 		local fileSha = cached and cached.sha or nil
-		local newFileSha, commitSha, err = GitHub.putFile(
+		if not fileSha then
+			local sha, shaErr = GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
+			if sha then
+				fileSha = sha
+			elseif shaErr and not tostring(shaErr):find("http 404", 1, true) then
+				return false, shaErr
+			end
+		end
+		local newFileSha, commitSha, err, putDt = GitHub.putFile(
 			cfg.owner,
 			cfg.repo,
 			cfg.branch,
@@ -571,9 +589,12 @@ local function doPush(cfg, jobId)
 			fileSha
 		)
 		if not newFileSha then
-			local sha = GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
-			if sha then
-				newFileSha, commitSha, err = GitHub.putFile(
+			if err and (err:find("http 409", 1, true) or err:find("http 422", 1, true) or err:find("sha", 1, true)) then
+				local sha, shaErr = GitHub.getFileSha(cfg.owner, cfg.repo, cfg.branch, only.path, cfg.token)
+				if not sha then
+					return false, shaErr or "failed to get file sha"
+				end
+				newFileSha, commitSha, err, putDt = GitHub.putFile(
 					cfg.owner,
 					cfg.repo,
 					cfg.branch,
@@ -583,6 +604,8 @@ local function doPush(cfg, jobId)
 					only.content,
 					sha
 				)
+			else
+				return false, err or "push failed"
 			end
 		end
 		if newFileSha then
@@ -594,7 +617,13 @@ local function doPush(cfg, jobId)
 			sourceIndex.dirty = {}
 			sourceIndex.removed = {}
 			local dt = os.clock() - tStart
-			return true, ("pushed %d files (commit %s) (%.1fs)"):format(changedCount, tostring(commitSha and commitSha:sub(1, 7) or "unknown"), dt)
+			local perf = ""
+			if putDt and putDt > 5 then
+				perf = (" [put %.1fs]"):format(putDt)
+			end
+			lastPutDuration = putDt or 0
+			lastPushDuration = dt
+			return true, ("pushed %d files (commit %s) (%.1fs)%s"):format(changedCount, tostring(commitSha and commitSha:sub(1, 7) or "unknown"), dt, perf)
 		elseif err then
 			return false, err
 		end
@@ -637,6 +666,7 @@ local function doPush(cfg, jobId)
 			if timingFast and ((timingFast.tree or 0) + (timingFast.commit or 0) + (timingFast.ref or 0)) > 5 then
 				perf = (" [tree %.1fs, commit %.1fs, ref %.1fs]"):format(timingFast.tree or 0, timingFast.commit or 0, timingFast.ref or 0)
 			end
+			lastPushDuration = dt
 			return true, ("pushed %d files (%s) (%.1fs)%s"):format(changedCount, tostring(msgFast), dt, perf)
 		elseif okFast == false then
 			return true, msgFast
@@ -697,6 +727,7 @@ local function doPush(cfg, jobId)
 	if timing and ((timing.tree or 0) + (timing.commit or 0) + (timing.ref or 0)) > 5 then
 		perf = (" [tree %.1fs, commit %.1fs, ref %.1fs]"):format(timing.tree or 0, timing.commit or 0, timing.ref or 0)
 	end
+	lastPushDuration = dt
 	return true, ("pushed %d files (%s) (%.1fs)%s"):format(changedCount, tostring(msgOrErr), dt, perf)
 end
 

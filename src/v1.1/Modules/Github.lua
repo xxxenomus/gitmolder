@@ -6,38 +6,14 @@ local Base64 = require(script.Parent.Base64)
 
 local GitHub = {}
 
-local REQUEST_TIMEOUT = 30
-
 local function requestAsync(req)
-	local done = false
-	local res = nil
-	local err = nil
-
-	task.spawn(function()
-		local ok, result = pcall(function()
-			return HttpService:RequestAsync(req)
-		end)
-		if ok then
-			res = result
-		else
-			err = result
-		end
-		done = true
+	local ok, result = pcall(function()
+		return HttpService:RequestAsync(req)
 	end)
-
-	local start = os.clock()
-	while not done do
-		if (os.clock() - start) > REQUEST_TIMEOUT then
-			return nil, "timeout"
-		end
-		task.wait(0.05)
+	if not ok then
+		return nil, tostring(result)
 	end
-
-	if not res then
-		return nil, tostring(err)
-	end
-
-	return res, nil
+	return result, nil
 end
 
 local function requestJson(method, url, token, bodyTable)
@@ -190,9 +166,11 @@ end
 function GitHub.getFileSha(owner, repo, branch, path, token)
 	local encPath = encodePath(path)
 	local url = ("https://api.github.com/repos/%s/%s/contents/%s?ref=%s"):format(owner, repo, encPath, HttpService:UrlEncode(branch))
+	local t0 = os.clock()
 	local data, err = requestJson("GET", url, token, nil)
+	local dt = os.clock() - t0
 	if not data then return nil, err end
-	return data.sha or nil, nil
+	return data.sha or nil, nil, dt
 end
 
 function GitHub.putFile(owner, repo, branch, token, path, message, content, sha)
@@ -207,11 +185,13 @@ function GitHub.putFile(owner, repo, branch, token, path, message, content, sha)
 		body.sha = sha
 	end
 
+	local t0 = os.clock()
 	local data, err = requestJson("PUT", url, token, body)
+	local dt = os.clock() - t0
 	if not data then return nil, nil, err end
 	local newFileSha = data.content and data.content.sha or nil
 	local commitSha = data.commit and data.commit.sha or nil
-	return newFileSha, commitSha, nil
+	return newFileSha, commitSha, nil, dt
 end
 
 return GitHub
