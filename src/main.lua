@@ -3,6 +3,7 @@
 
 local plugin = script:FindFirstAncestorOfClass("Plugin") or getfenv().plugin
 local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 
 local modules = script.Parent:WaitForChild("Modules")
 local GitHub = require(modules.Github)
@@ -16,67 +17,44 @@ local wantedStatus = "ready"
 
 --ui
 local toolbar = plugin:CreateToolbar("Gitmolder")
-local openBtn = toolbar:CreateButton("Gitmolder", "open", "")
-local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, false, 520, 360, 420, 320)
-local widget = plugin:CreateDockWidgetPluginGui("GitmolderWidget", widgetInfo)
-widget.Title = "Gitmolder"
-widget.Enabled = false
-openBtn.Click:Connect(function()
-	widget.Enabled = not widget.Enabled
+local settingsBtn = toolbar:CreateButton("GM settings", "open settings", "")
+local gitBtn = toolbar:CreateButton("Gitmolder", "open gitmolder", "")
+
+local settingsInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, false, 420, 360, 360, 320)
+local settingsWidget = plugin:CreateDockWidgetPluginGui("GitmolderSettingsWidget", settingsInfo)
+settingsWidget.Title = "GM settings"
+settingsWidget.Enabled = false
+settingsBtn.Click:Connect(function()
+	settingsWidget.Enabled = not settingsWidget.Enabled
 end)
 
-local root = Instance.new("Frame")
-root.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-root.BorderSizePixel = 0
-root.Size = UDim2.fromScale(1, 1)
-root.Parent = widget
+local gitInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, false, 420, 220, 360, 200)
+local gitWidget = plugin:CreateDockWidgetPluginGui("GitmolderMainWidget", gitInfo)
+gitWidget.Title = "Gitmolder"
+gitWidget.Enabled = false
+gitBtn.Click:Connect(function()
+	gitWidget.Enabled = not gitWidget.Enabled
+end)
 
 local pad = 12
 
-local tabBar = Instance.new("Frame")
-tabBar.BackgroundTransparency = 1
-tabBar.BorderSizePixel = 0
-tabBar.Size = UDim2.new(1, 0, 0, 32)
-tabBar.Parent = root
-
-local tabLayout = Instance.new("UIListLayout")
-tabLayout.FillDirection = Enum.FillDirection.Horizontal
-tabLayout.Padding = UDim.new(0, 6)
-tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
-tabLayout.Parent = tabBar
-
-local function mkTabBtn(text)
-	local btn = Instance.new("TextButton")
-	btn.BackgroundColor3 = Color3.fromRGB(44, 44, 54)
-	btn.BorderSizePixel = 0
-	btn.Size = UDim2.fromOffset(120, 28)
-	btn.Font = Enum.Font.Gotham
-	btn.TextSize = 12
-	btn.TextColor3 = Color3.fromRGB(245, 245, 250)
-	btn.Text = text
-	btn.AutoButtonColor = true
-	btn.Parent = tabBar
-	return btn
+local function mkRoot(parent)
+	local root = Instance.new("Frame")
+	root.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+	root.BorderSizePixel = 0
+	root.Size = UDim2.fromScale(1, 1)
+	root.Parent = parent
+	return root
 end
 
-local settingsTabBtn = mkTabBtn("GM settings")
-local gitTabBtn = mkTabBtn("Gitmolder")
-
-local content = Instance.new("Frame")
-content.BackgroundTransparency = 1
-content.BorderSizePixel = 0
-content.Position = UDim2.fromOffset(0, 36)
-content.Size = UDim2.new(1, 0, 1, -36)
-content.Parent = root
-
-local function mkScroller()
+local function mkScroller(parent)
 	local frame = Instance.new("ScrollingFrame")
 	frame.BackgroundTransparency = 1
 	frame.BorderSizePixel = 0
 	frame.Size = UDim2.fromScale(1, 1)
 	frame.CanvasSize = UDim2.new(0, 0, 0, 0)
 	frame.ScrollBarThickness = 6
-	frame.Parent = content
+	frame.Parent = parent
 
 	local padding = Instance.new("UIPadding")
 	padding.PaddingLeft = UDim.new(0, pad)
@@ -97,26 +75,11 @@ local function mkScroller()
 	return frame
 end
 
-local settingsFrame = mkScroller()
-local gitFrame = mkScroller()
-gitFrame.Visible = false
+local settingsRoot = mkRoot(settingsWidget)
+local settingsFrame = mkScroller(settingsRoot)
 
-local function setActiveTab(isSettings)
-	settingsFrame.Visible = isSettings
-	gitFrame.Visible = not isSettings
-	settingsTabBtn.BackgroundColor3 = isSettings and Color3.fromRGB(64, 64, 80) or Color3.fromRGB(44, 44, 54)
-	gitTabBtn.BackgroundColor3 = (not isSettings) and Color3.fromRGB(64, 64, 80) or Color3.fromRGB(44, 44, 54)
-end
-
-settingsTabBtn.MouseButton1Click:Connect(function()
-	setActiveTab(true)
-end)
-
-gitTabBtn.MouseButton1Click:Connect(function()
-	setActiveTab(false)
-end)
-
-setActiveTab(true)
+local gitRoot = mkRoot(gitWidget)
+local gitFrame = mkScroller(gitRoot)
 
 local function mkLabeledBox(parent, label, placeholder, isPassword)
 	local wrap = Instance.new("Frame")
@@ -294,8 +257,6 @@ local function setBusy(state)
 	setUiEnabled(pushBtn, not state)
 	setUiEnabled(pullBtn, not state)
 	setUiEnabled(cancelBtn, state)
-	setUiEnabled(settingsTabBtn, not state)
-	setUiEnabled(gitTabBtn, not state)
 
 	setUiEnabled(ownerBox, not state)
 	setUiEnabled(repoBox, not state)
@@ -512,6 +473,9 @@ local function doPush(cfg, jobId)
 	if cfg.token == "" then
 		return false, "token missing"
 	end
+	if not HttpService.HttpEnabled then
+		return false, "http disabled"
+	end
 
 	saveUi(cfg)
 
@@ -603,6 +567,9 @@ local function doPull(cfg, jobId)
 	end
 	if cfg.token == "" then
 		return false, "token missing"
+	end
+	if not HttpService.HttpEnabled then
+		return false, "http disabled"
 	end
 
 	saveUi(cfg)

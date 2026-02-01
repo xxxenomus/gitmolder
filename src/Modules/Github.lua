@@ -2,6 +2,40 @@ local HttpService = game:GetService("HttpService")
 
 local GitHub = {}
 
+local REQUEST_TIMEOUT = 30
+
+local function requestAsync(req, label)
+	local done = false
+	local res = nil
+	local err = nil
+
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return HttpService:RequestAsync(req)
+		end)
+		if ok then
+			res = result
+		else
+			err = result
+		end
+		done = true
+	end)
+
+	local start = os.clock()
+	while not done do
+		if (os.clock() - start) > REQUEST_TIMEOUT then
+			return nil, ("timeout: %s"):format(label or "request")
+		end
+		task.wait(0.05)
+	end
+
+	if not res then
+		return nil, tostring(err)
+	end
+
+	return res, nil
+end
+
 local function requestJson(method, url, token, bodyTable)
 	local headers = {
 		["Accept"] = "application/vnd.github+json",
@@ -23,7 +57,10 @@ local function requestJson(method, url, token, bodyTable)
 		req.Headers["Content-Type"] = "application/json"
 	end
 
-	local res = HttpService:RequestAsync(req)
+	local res, reqErr = requestAsync(req, method .. " " .. url)
+	if not res then
+		return nil, reqErr
+	end
 	if not res.Success then
 		return nil, ("http %d: %s"):format(res.StatusCode, tostring(res.Body))
 	end
@@ -50,12 +87,15 @@ local function requestRaw(url, token)
 		headers["Authorization"] = "Bearer " .. token
 	end
 
-	local res = HttpService:RequestAsync({
+	local res, reqErr = requestAsync({
 		Url = url,
 		Method = "GET",
 		Headers = headers,
-	})
+	}, "GET " .. url)
 
+	if not res then
+		return nil, reqErr
+	end
 	if not res.Success then
 		return nil, ("http %d"):format(res.StatusCode)
 	end
