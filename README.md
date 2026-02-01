@@ -5,8 +5,8 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 ## Features
 
 -  **GitHub Integration** - Connect your Roblox projects to GitHub repositories
--  **Push to GitHub** - Sync your local changes to a remote GitHub repository
--  **Pull from GitHub** - Fetch the latest code from your repository
+-  **v1.0: Push to GitHub** - Sync your local changes to a remote GitHub repository
+-  **Pull from GitHub** - Fetch the latest code from your repository (v1.0 & v1.1)
 
 ## Requirements
 
@@ -16,18 +16,18 @@ A Roblox Studio plugin that enables synchronization with GitHub repositories. Pu
 
 ## Installation
 
-1. Download the plugin main.lua file
+1. Download the version folder
 2. Place in Roblox studio workspace
-3. Right-click the script and save as local plugin
+3. Right-click the folder and save as local plugin
 3. Enable HTTP requests in experience settings
 
 ## Usage
 
-1. Click the **Gitmolder** button in the toolbar under Plugins tab
-2. Enter your GitHub credentials and repository information
-3. Use the available buttons to:
-   - **Push** - Upload your changes to GitHub
-   - **Pull** - Download the latest changes from GitHub
+1. Click **GM settings** in the toolbar to enter GitHub credentials
+2. Click **Gitmolder** in the toolbar to open the sync widget
+3. Use the available buttons:
+   - **v1.0**: Push / Pull / Cancel
+   - **v1.1**: Pull / Cancel (push removed)
 
    
 More features might be added later, including commiting before push and merge conflict handling.
