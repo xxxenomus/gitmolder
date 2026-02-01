@@ -312,6 +312,7 @@ local sourceIndex = {
 	byInst = {},
 	byPath = {},
 	dirty = {},
+	removed = {},
 	conns = {},
 	rootConns = {},
 	initialized = false,
@@ -332,6 +333,7 @@ local function removeInst(inst)
 	if data then
 		if data.path then
 			sourceIndex.byPath[data.path] = nil
+			sourceIndex.removed[data.path] = true
 		end
 		sourceIndex.byInst[inst] = nil
 	end
@@ -358,7 +360,7 @@ local function markDirty(inst)
 	sourceIndex.dirty[inst] = true
 end
 
-local function trackInst(inst, sourceOpt)
+local function trackInst(inst, sourceOpt, markDirtyOnAdd)
 	if not inst:IsA("LuaSourceContainer") then return end
 	if sourceIndex.byInst[inst] then
 		if sourceOpt ~= nil then
@@ -382,6 +384,9 @@ local function trackInst(inst, sourceOpt)
 	sourceIndex.byInst[inst] = { inst = inst, source = src, hash = Hash.fnv1a32(src), path = path }
 	if path then
 		sourceIndex.byPath[path] = inst
+	end
+	if markDirtyOnAdd then
+		markDirty(inst)
 	end
 
 	local conns = {}
@@ -409,7 +414,7 @@ local function ensureRootWatchers()
 		local svc = PathUtil.getService(svcName)
 		if svc then
 			table.insert(sourceIndex.rootConns, svc.DescendantAdded:Connect(function(inst)
-				trackInst(inst)
+				trackInst(inst, nil, true)
 			end))
 			table.insert(sourceIndex.rootConns, svc.DescendantRemoving:Connect(function(inst)
 				removeInst(inst)
@@ -423,6 +428,7 @@ local function rebuildIndex(prefix, jobId)
 	sourceIndex.byInst = {}
 	sourceIndex.byPath = {}
 	sourceIndex.dirty = {}
+	sourceIndex.removed = {}
 
 	ensureRootWatchers()
 
@@ -444,7 +450,7 @@ local function rebuildIndex(prefix, jobId)
 	end
 
 	for _, item in pairs(sources) do
-		trackInst(item.inst, item.source)
+		trackInst(item.inst, item.source, false)
 	end
 
 	sourceIndex.initialized = true
@@ -476,7 +482,6 @@ local function refreshDirty(jobId)
 			removeInst(inst)
 		end
 	end
-	sourceIndex.dirty = {}
 	return true
 end
 
@@ -498,48 +503,54 @@ local function doPush(cfg, jobId)
 		if not ok then return false, err end
 	end
 
+	local cache = loadCache(cfg)
+	if next(sourceIndex.dirty) == nil and next(sourceIndex.removed) == nil then
+		return true, "no changes (cached)"
+	end
 	local okDirty, errDirty = refreshDirty(jobId)
 	if not okDirty then return false, errDirty end
 
-	local cache = loadCache(cfg)
 	local changed = {}
 	local cacheNext = {}
 
-	local totalLocal = 0
 	local changedCount = 0
 
-	for _, data in pairs(sourceIndex.byInst) do
-		if data.path and data.source then
-			totalLocal += 1
-			local h = data.hash or Hash.fnv1a32(data.source)
-			local cached = getCacheEntry(cache, data.path)
-			local cachedHash = cached and cached.hash or nil
-			if cached and cachedHash == h then
-				setCacheEntry(cacheNext, data.path, h, cached.sha)
-			else
-				setCacheEntry(cacheNext, data.path, h, nil)
-			end
-			if cachedHash ~= h then
-			changedCount += 1
-			table.insert(changed, {
-				path = data.path,
-				mode = "100644",
-				type = "blob",
-				content = data.source,
-			})
-			end
-		end
+	for path, entry in pairs(cache) do
+		cacheNext[path] = entry
 	end
 
-	--drop cache entries for stuff i deleted locally
-	for path, _ in pairs(cache) do
-		if cacheNext[path] == nil then
-			cacheNext[path] = nil
+	for path, _ in pairs(sourceIndex.removed) do
+		cacheNext[path] = nil
+	end
+	sourceIndex.removed = {}
+
+	for inst, _ in pairs(sourceIndex.dirty) do
+		if inst and inst:IsDescendantOf(game) and inst:IsA("LuaSourceContainer") then
+			local data = sourceIndex.byInst[inst]
+			if data and data.path and data.source then
+				local h = data.hash or Hash.fnv1a32(data.source)
+				local cached = getCacheEntry(cache, data.path)
+				local cachedHash = cached and cached.hash or nil
+				if cachedHash ~= h then
+					changedCount += 1
+					table.insert(changed, {
+						path = data.path,
+						mode = "100644",
+						type = "blob",
+						content = data.source,
+					})
+					setCacheEntry(cacheNext, data.path, h, nil)
+				else
+					setCacheEntry(cacheNext, data.path, h, cached.sha)
+				end
+			end
 		end
 	end
+	sourceIndex.dirty = {}
 
 	if changedCount == 0 then
-		return true, ("no changes (%d scripts scanned)"):format(totalLocal)
+		saveCache(cfg, cacheNext)
+		return true, "no changes"
 	end
 
 	setStatus(("getting head commit (%d changed)..."):format(changedCount), "progress")
