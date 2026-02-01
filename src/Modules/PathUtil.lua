@@ -1,3 +1,6 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local PathUtil = {}
 
 local function getScriptSuffix(inst)

@@ -1,3 +1,6 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local plugin = script:FindFirstAncestorOfClass("Plugin") or getfenv().plugin
 local RunService = game:GetService("RunService")
 
@@ -29,29 +32,114 @@ root.Size = UDim2.fromScale(1, 1)
 root.Parent = widget
 
 local pad = 12
-local y = 12
 
-local function mkLabel(text)
+local tabBar = Instance.new("Frame")
+tabBar.BackgroundTransparency = 1
+tabBar.BorderSizePixel = 0
+tabBar.Size = UDim2.new(1, 0, 0, 32)
+tabBar.Parent = root
+
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 6)
+tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tabLayout.Parent = tabBar
+
+local function mkTabBtn(text)
+	local btn = Instance.new("TextButton")
+	btn.BackgroundColor3 = Color3.fromRGB(44, 44, 54)
+	btn.BorderSizePixel = 0
+	btn.Size = UDim2.fromOffset(120, 28)
+	btn.Font = Enum.Font.Gotham
+	btn.TextSize = 12
+	btn.TextColor3 = Color3.fromRGB(245, 245, 250)
+	btn.Text = text
+	btn.AutoButtonColor = true
+	btn.Parent = tabBar
+	return btn
+end
+
+local settingsTabBtn = mkTabBtn("GM settings")
+local gitTabBtn = mkTabBtn("Gitmolder")
+
+local content = Instance.new("Frame")
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.Position = UDim2.fromOffset(0, 36)
+content.Size = UDim2.new(1, 0, 1, -36)
+content.Parent = root
+
+local function mkScroller()
+	local frame = Instance.new("ScrollingFrame")
+	frame.BackgroundTransparency = 1
+	frame.BorderSizePixel = 0
+	frame.Size = UDim2.fromScale(1, 1)
+	frame.CanvasSize = UDim2.new(0, 0, 0, 0)
+	frame.ScrollBarThickness = 6
+	frame.Parent = content
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingLeft = UDim.new(0, pad)
+	padding.PaddingRight = UDim.new(0, pad)
+	padding.PaddingTop = UDim.new(0, pad)
+	padding.PaddingBottom = UDim.new(0, pad)
+	padding.Parent = frame
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 8)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = frame
+
+	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + pad)
+	end)
+
+	return frame
+end
+
+local settingsFrame = mkScroller()
+local gitFrame = mkScroller()
+gitFrame.Visible = false
+
+local function setActiveTab(isSettings)
+	settingsFrame.Visible = isSettings
+	gitFrame.Visible = not isSettings
+	settingsTabBtn.BackgroundColor3 = isSettings and Color3.fromRGB(64, 64, 80) or Color3.fromRGB(44, 44, 54)
+	gitTabBtn.BackgroundColor3 = (not isSettings) and Color3.fromRGB(64, 64, 80) or Color3.fromRGB(44, 44, 54)
+end
+
+settingsTabBtn.MouseButton1Click:Connect(function()
+	setActiveTab(true)
+end)
+
+gitTabBtn.MouseButton1Click:Connect(function()
+	setActiveTab(false)
+end)
+
+setActiveTab(true)
+
+local function mkLabeledBox(parent, label, placeholder, isPassword)
+	local wrap = Instance.new("Frame")
+	wrap.BackgroundTransparency = 1
+	wrap.Size = UDim2.new(1, 0, 0, 0)
+	wrap.Parent = parent
+	wrap.AutomaticSize = Enum.AutomaticSize.Y
+
 	local lbl = Instance.new("TextLabel")
 	lbl.BackgroundTransparency = 1
-	lbl.Size = UDim2.new(1, -pad * 2, 0, 18)
-	lbl.Position = UDim2.fromOffset(pad, y)
+	lbl.Size = UDim2.new(1, 0, 0, 16)
 	lbl.Font = Enum.Font.Gotham
 	lbl.TextSize = 12
 	lbl.TextXAlignment = Enum.TextXAlignment.Left
 	lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
-	lbl.Text = text
-	lbl.Parent = root
-	y += 18
-	return lbl
-end
+	lbl.Text = label
+	lbl.Parent = wrap
 
-local function mkBox(placeholder, isPassword)
 	local box = Instance.new("TextBox")
 	box.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
 	box.BorderSizePixel = 0
-	box.Size = UDim2.new(1, -pad * 2, 0, 26)
-	box.Position = UDim2.fromOffset(pad, y)
+	box.Size = UDim2.new(1, 0, 0, 26)
+	box.Position = UDim2.fromOffset(0, 18)
 	box.Font = Enum.Font.Gotham
 	box.TextSize = 12
 	box.TextColor3 = Color3.fromRGB(235, 235, 240)
@@ -59,99 +147,73 @@ local function mkBox(placeholder, isPassword)
 	box.ClearTextOnFocus = false
 	box.TextXAlignment = Enum.TextXAlignment.Left
 	box.Text = ""
-	box.Parent = root
+	box.Parent = wrap
 	if isPassword then
 		box.TextEditable = true
 	end
-	y += 30
+
 	return box
 end
 
-local function mkBtn(text, w)
+local ownerBox = mkLabeledBox(settingsFrame, "owner", "xenomus", false)
+local repoBox = mkLabeledBox(settingsFrame, "repo", "xenomus-dev", false)
+local branchBox = mkLabeledBox(settingsFrame, "branch", "main", false)
+local prefixBox = mkLabeledBox(settingsFrame, "prefix (optional)", "portfolio/", false)
+local tokenBox = mkLabeledBox(settingsFrame, "token (needs repo access)", "ghp_...", true)
+
+local msgBox = mkLabeledBox(gitFrame, "commit msg", "sync from studio", false)
+
+local btnRow = Instance.new("Frame")
+btnRow.BackgroundTransparency = 1
+btnRow.Size = UDim2.new(1, 0, 0, 0)
+btnRow.Parent = gitFrame
+btnRow.AutomaticSize = Enum.AutomaticSize.Y
+
+local grid = Instance.new("UIGridLayout")
+grid.CellPadding = UDim2.fromOffset(6, 6)
+grid.CellSize = UDim2.new(0.5, -3, 0, 28)
+grid.SortOrder = Enum.SortOrder.LayoutOrder
+grid.Parent = btnRow
+
+local function updateButtonGrid()
+	local w = btnRow.AbsoluteSize.X
+	if w < 260 then
+		grid.CellSize = UDim2.new(1, 0, 0, 28)
+	else
+		grid.CellSize = UDim2.new(0.5, -3, 0, 28)
+	end
+end
+
+btnRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateButtonGrid)
+task.defer(updateButtonGrid)
+
+local function mkBtn(parent, text)
 	local btn = Instance.new("TextButton")
 	btn.BackgroundColor3 = Color3.fromRGB(44, 44, 54)
 	btn.BorderSizePixel = 0
-	btn.Size = UDim2.fromOffset(w or 120, 28)
-	btn.Position = UDim2.fromOffset(pad, y)
+	btn.Size = UDim2.fromOffset(120, 28)
 	btn.Font = Enum.Font.Gotham
 	btn.TextSize = 12
 	btn.TextColor3 = Color3.fromRGB(245, 245, 250)
 	btn.Text = text
 	btn.AutoButtonColor = true
-	btn.Parent = root
+	btn.Parent = parent
 	return btn
 end
 
-mkLabel("owner")
-local ownerBox = mkBox("xenomus", false)
-
-mkLabel("repo")
-local repoBox = mkBox("xenomus-dev", false)
-
-mkLabel("branch")
-local branchBox = mkBox("main", false)
-
-mkLabel("prefix (optional)")
-local prefixBox = mkBox("portfolio/", false)
-
-mkLabel("token (needs repo access)")
-local tokenBox = mkBox("ghp_...", true)
-
-mkLabel("commit msg")
-local msgBox = mkBox("sync from studio", false)
-
-local pushBtn = mkBtn("push", 120)
-pushBtn.Position = UDim2.fromOffset(pad, y)
-
-local pullBtn = mkBtn("pull", 120)
-pullBtn.Position = UDim2.fromOffset(pad + 130, y)
-
-local cancelBtn = mkBtn("cancel", 120)
-cancelBtn.Position = UDim2.fromOffset(pad + 260, y)
-
-y += 38
+local pushBtn = mkBtn(btnRow, "push")
+local pullBtn = mkBtn(btnRow, "pull")
+local cancelBtn = mkBtn(btnRow, "cancel")
 
 local statusLbl = Instance.new("TextLabel")
 statusLbl.BackgroundTransparency = 1
-statusLbl.Size = UDim2.new(1, -pad * 2, 0, 22)
-statusLbl.Position = UDim2.fromOffset(pad, y)
+statusLbl.Size = UDim2.new(1, 0, 0, 18)
 statusLbl.Font = Enum.Font.Gotham
 statusLbl.TextSize = 12
 statusLbl.TextXAlignment = Enum.TextXAlignment.Left
 statusLbl.TextColor3 = Color3.fromRGB(170, 170, 180)
 statusLbl.Text = "ready"
-statusLbl.Parent = root
-
-y += 24
-
-local progressBack = Instance.new("Frame")
-progressBack.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
-progressBack.BorderSizePixel = 0
-progressBack.Size = UDim2.new(1, -pad * 2, 0, 6)
-progressBack.Position = UDim2.fromOffset(pad, y)
-progressBack.Parent = root
-
-local progressFill = Instance.new("Frame")
-progressFill.BackgroundColor3 = Color3.fromRGB(80, 170, 255)
-progressFill.BorderSizePixel = 0
-progressFill.Size = UDim2.new(0, 0, 1, 0)
-progressFill.Parent = progressBack
-
-y += 12
-
-local logFrame = Instance.new("ScrollingFrame")
-logFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
-logFrame.BorderSizePixel = 0
-logFrame.Position = UDim2.fromOffset(pad, y)
-logFrame.Size = UDim2.new(1, -pad * 2, 1, -(y + pad))
-logFrame.ScrollBarThickness = 6
-logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-logFrame.Parent = root
-
-local logLayout = Instance.new("UIListLayout")
-logLayout.Padding = UDim.new(0, 2)
-logLayout.SortOrder = Enum.SortOrder.LayoutOrder
-logLayout.Parent = logFrame
+statusLbl.Parent = gitFrame
 
 --im updating status on heartbeat so parallel tasks dont fight each other
 RunService.Heartbeat:Connect(function()
@@ -164,52 +226,6 @@ local function trim(s)
 	return (tostring(s or ""):gsub("^%s*(.-)%s*$", "%1"))
 end
 
-local logLines = {}
-local maxLogLines = 200
-
-local function setProgress(done, total)
-	if total == nil or total <= 0 then
-		progressFill.Size = UDim2.new(0, 0, 1, 0)
-		return
-	end
-	local pct = math.clamp(done / total, 0, 1)
-	progressFill.Size = UDim2.new(pct, 0, 1, 0)
-end
-
-local function logLine(text, isError)
-	local ts = ""
-	local ok, stamp = pcall(function()
-		return os.date("%H:%M:%S")
-	end)
-	if ok and stamp then
-		ts = "[" .. stamp .. "] "
-	end
-
-	local lbl = Instance.new("TextLabel")
-	lbl.BackgroundTransparency = 1
-	lbl.Size = UDim2.new(1, -6, 0, 16)
-	lbl.Font = Enum.Font.GothamMono
-	lbl.TextSize = 12
-	lbl.TextXAlignment = Enum.TextXAlignment.Left
-	lbl.TextColor3 = isError and Color3.fromRGB(255, 120, 120) or Color3.fromRGB(190, 190, 200)
-	lbl.Text = ts .. text
-	lbl.Parent = logFrame
-
-	table.insert(logLines, lbl)
-	if #logLines > maxLogLines then
-		logLines[1]:Destroy()
-		table.remove(logLines, 1)
-	end
-
-	logFrame.CanvasSize = UDim2.new(0, 0, 0, logLayout.AbsoluteContentSize.Y + 4)
-	logFrame.CanvasPosition = Vector2.new(0, math.max(0, logLayout.AbsoluteContentSize.Y - logFrame.AbsoluteSize.Y))
-
-	if isError then
-		warn(text)
-	else
-		print(text)
-	end
-end
 
 local function getCacheEntry(cache, path)
 	local v = cache[path]
@@ -278,6 +294,8 @@ local function setBusy(state)
 	setUiEnabled(pushBtn, not state)
 	setUiEnabled(pullBtn, not state)
 	setUiEnabled(cancelBtn, state)
+	setUiEnabled(settingsTabBtn, not state)
+	setUiEnabled(gitTabBtn, not state)
 
 	setUiEnabled(ownerBox, not state)
 	setUiEnabled(repoBox, not state)
@@ -306,8 +324,6 @@ local function cancelJob()
 	isBusy = false
 	setBusy(false)
 	wantedStatus = "canceled"
-	setProgress(0, 0)
-	logLine("job: canceled", true)
 end
 
 cancelBtn.MouseButton1Click:Connect(cancelJob)
@@ -436,9 +452,6 @@ local function rebuildIndex(prefix, jobId)
 	ensureRootWatchers()
 
 	wantedStatus = "scanning studio..."
-	setProgress(0, 0)
-	logLine("scan: start")
-	local t0 = os.clock()
 	local scanned = 0
 
 	local function onProgress(count)
@@ -460,14 +473,12 @@ local function rebuildIndex(prefix, jobId)
 	end
 
 	sourceIndex.initialized = true
-	logLine(("scan: %d scripts in %.2fs"):format(scanned, os.clock() - t0))
 	return true
 end
 
 local function refreshDirty(jobId)
 	if next(sourceIndex.dirty) == nil then return true end
 	wantedStatus = "updating changed scripts..."
-	local t0 = os.clock()
 	local refreshed = 0
 	for inst, _ in pairs(sourceIndex.dirty) do
 		if isCanceled(jobId) then return false, "canceled" end
@@ -491,7 +502,6 @@ local function refreshDirty(jobId)
 		end
 	end
 	sourceIndex.dirty = {}
-	logLine(("dirty refresh: %d in %.2fs"):format(refreshed, os.clock() - t0))
 	return true
 end
 
@@ -555,8 +565,6 @@ local function doPush(cfg, jobId)
 	end
 
 	wantedStatus = ("getting head commit (%d changed)..."):format(changedCount)
-	logLine(("push: %d changed, %d total"):format(changedCount, totalLocal))
-
 	local headCommitSha, err1 = GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
 	if not headCommitSha then return false, err1 end
 	if isCanceled(jobId) then return false, "canceled" end
@@ -655,13 +663,10 @@ local function doPull(cfg, jobId)
 	end
 
 	if skipped > 0 then
-		logLine(("pull: skipping %d unchanged files"):format(skipped))
+		--quiet
 	end
 
 	wantedStatus = ("downloading %d files (raw github)..."):format(#toDownload)
-	logLine(("pull: downloading %d files"):format(#toDownload))
-	setProgress(0, #toDownload)
-	local tDownload = os.clock()
 
 	local function dl(item, idx, throttle)
 		if isCanceled(jobId) then return nil end
@@ -692,7 +697,6 @@ local function doPull(cfg, jobId)
 		if (now - lastProgAt) > 0.12 or done == total then
 			lastProgAt = now
 			wantedStatus = ("downloading %d/%d..."):format(done, total)
-			setProgress(done, total)
 		end
 	end
 
@@ -704,13 +708,9 @@ local function doPull(cfg, jobId)
 	if #errors > 0 then
 		return false, tostring(errors[1].err)
 	end
-	logLine(("download: %d files in %.2fs"):format(#results, os.clock() - tDownload))
-
 	wantedStatus = "applying to studio..."
-	setProgress(0, #results)
 
 	local applied = 0
-	local tApply = os.clock()
 	for i, item in ipairs(results) do
 		if isCanceled(jobId) then return false, "canceled" end
 		if item and item.path and item.content then
@@ -753,13 +753,9 @@ local function doPull(cfg, jobId)
 				end
 			end
 		end
-		if i % 10 == 0 or i == #results then
-			setProgress(i, #results)
-		end
 	end
 
 	saveCache(cfg, cacheNext)
-	logLine(("apply: %d files in %.2fs"):format(applied, os.clock() - tApply))
 	return true, ("pulled %d files"):format(applied)
 end
 
@@ -771,23 +767,19 @@ local function runJob(fn)
 	local jobId = currentJob
 
 	local cfg = readCfg()
-	logLine("job: start")
-
 	task.spawn(function()
 		local ok, success, msg = pcall(fn, cfg, jobId)
 		if not isCanceled(jobId) then
 			if not ok then
 				wantedStatus = "error: " .. tostring(success)
-				logLine("job: error - " .. tostring(success), true)
+				warn(tostring(success))
 			elseif not success then
 				wantedStatus = "fail: " .. tostring(msg)
-				logLine("job: fail - " .. tostring(msg), true)
+				warn(tostring(msg))
 			else
 				wantedStatus = tostring(msg)
-				logLine("job: done - " .. tostring(msg))
 			end
 			setBusy(false)
-			setProgress(0, 0)
 		end
 	end)
 
@@ -795,7 +787,7 @@ local function runJob(fn)
 		if not isCanceled(jobId) and isBusy then
 			cancelJob()
 			wantedStatus = "timeout"
-			logLine("job: timeout", true)
+			warn("timeout")
 		end
 	end)
 end

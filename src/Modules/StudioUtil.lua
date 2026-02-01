@@ -1,3 +1,6 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local function getScriptSuffix(inst)
 	if inst:IsA("LocalScript") then return ".client.lua" end
 	if inst:IsA("Script") then return ".server.lua" end

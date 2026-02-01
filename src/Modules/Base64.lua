@@ -1,3 +1,6 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ+/"
 local base = {}
 

@@ -1,3 +1,6 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local HttpService = game:GetService("HttpService")
 local minInterval = 0.04 --25 req/sec
 local lastReq = 0

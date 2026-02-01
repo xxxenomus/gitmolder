@@ -6,7 +6,6 @@ local function requestJson(method, url, token, bodyTable)
 	local headers = {
 		["Accept"] = "application/vnd.github+json",
 		["X-GitHub-Api-Version"] = "2022-11-28",
-		["User-Agent"] = "RobloxStudioPlugin-Gitmolder",
 	}
 
 	if token and token ~= "" then
@@ -45,9 +44,7 @@ local function requestJson(method, url, token, bodyTable)
 end
 
 local function requestRaw(url, token)
-	local headers = {
-		["User-Agent"] = "RobloxStudioPlugin-Gitmolder",
-	}
+	local headers = {}
 
 	if token and token ~= "" then
 		headers["Authorization"] = "Bearer " .. token
@@ -65,6 +62,9 @@ local function requestRaw(url, token)
 
 	return res.Body, nil
 end
+
+--//script by xenomus
+--//discord: xxxenomus
 
 function GitHub.getRefCommitSha(owner, repo, branch, token)
 	local url = ("https://api.github.com/repos/%s/%s/git/ref/heads/%s"):format(owner, repo, branch)

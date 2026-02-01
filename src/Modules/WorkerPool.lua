@@ -1,3 +1,6 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local WorkerPool = {}
 
 --im keeping this simple, raw github is fast so i just cap concurrency

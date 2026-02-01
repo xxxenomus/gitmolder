@@ -1,3 +1,6 @@
+--//script by xenomus
+--//discord: xxxenomus
+
 local Hash = {}
 
 --im using fnv1a32 cuz its fast and good enough for change checks
