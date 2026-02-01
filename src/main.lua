@@ -14,6 +14,7 @@ local Hash = require(modules.Hash)
 local isBusy = false
 local currentJob = 0
 local wantedStatus = "ready"
+local wantedStatusColor = Color3.fromRGB(170, 170, 180)
 
 --ui
 local toolbar = plugin:CreateToolbar("Gitmolder")
@@ -126,29 +127,22 @@ local tokenBox = mkLabeledBox(settingsFrame, "token (needs repo access)", "ghp_.
 
 local msgBox = mkLabeledBox(gitFrame, "commit msg", "sync from studio", false)
 
-local btnRow = Instance.new("Frame")
-btnRow.BackgroundTransparency = 1
-btnRow.Size = UDim2.new(1, 0, 0, 0)
-btnRow.Parent = gitFrame
-btnRow.AutomaticSize = Enum.AutomaticSize.Y
+local primaryRow = Instance.new("Frame")
+primaryRow.BackgroundTransparency = 1
+primaryRow.Size = UDim2.new(1, 0, 0, 0)
+primaryRow.Parent = gitFrame
+primaryRow.AutomaticSize = Enum.AutomaticSize.Y
 
 local grid = Instance.new("UIGridLayout")
 grid.CellPadding = UDim2.fromOffset(6, 6)
 grid.CellSize = UDim2.new(0.5, -3, 0, 28)
 grid.SortOrder = Enum.SortOrder.LayoutOrder
-grid.Parent = btnRow
+grid.Parent = primaryRow
 
-local function updateButtonGrid()
-	local w = btnRow.AbsoluteSize.X
-	if w < 260 then
-		grid.CellSize = UDim2.new(1, 0, 0, 28)
-	else
-		grid.CellSize = UDim2.new(0.5, -3, 0, 28)
-	end
-end
-
-btnRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateButtonGrid)
-task.defer(updateButtonGrid)
+local cancelRow = Instance.new("Frame")
+cancelRow.BackgroundTransparency = 1
+cancelRow.Size = UDim2.new(1, 0, 0, 28)
+cancelRow.Parent = gitFrame
 
 local function mkBtn(parent, text)
 	local btn = Instance.new("TextButton")
@@ -164,9 +158,26 @@ local function mkBtn(parent, text)
 	return btn
 end
 
-local pushBtn = mkBtn(btnRow, "push")
-local pullBtn = mkBtn(btnRow, "pull")
-local cancelBtn = mkBtn(btnRow, "cancel")
+local pushBtn = mkBtn(primaryRow, "push")
+local pullBtn = mkBtn(primaryRow, "pull")
+local cancelBtn = mkBtn(cancelRow, "cancel")
+
+pushBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 85)
+pullBtn.BackgroundColor3 = Color3.fromRGB(160, 70, 70)
+
+local function updateButtonLayout()
+	local w = primaryRow.AbsoluteSize.X
+	if w < 260 then
+		grid.CellSize = UDim2.new(1, 0, 0, 28)
+		cancelBtn.Size = UDim2.new(1, 0, 0, 28)
+	else
+		grid.CellSize = UDim2.new(0.5, -3, 0, 28)
+		cancelBtn.Size = UDim2.new(1, 0, 0, 28)
+	end
+end
+
+primaryRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateButtonLayout)
+task.defer(updateButtonLayout)
 
 local statusLbl = Instance.new("TextLabel")
 statusLbl.BackgroundTransparency = 1
@@ -183,10 +194,24 @@ RunService.Heartbeat:Connect(function()
 	if statusLbl.Text ~= wantedStatus then
 		statusLbl.Text = wantedStatus
 	end
+	if statusLbl.TextColor3 ~= wantedStatusColor then
+		statusLbl.TextColor3 = wantedStatusColor
+	end
 end)
 
 local function trim(s)
 	return (tostring(s or ""):gsub("^%s*(.-)%s*$", "%1"))
+end
+
+local function setStatus(text, kind)
+	wantedStatus = text
+	if kind == "success" then
+		wantedStatusColor = Color3.fromRGB(120, 220, 140)
+	elseif kind == "error" then
+		wantedStatusColor = Color3.fromRGB(230, 120, 120)
+	else
+		wantedStatusColor = Color3.fromRGB(170, 170, 180)
+	end
 end
 
 
@@ -241,7 +266,17 @@ local function setUiEnabled(guiObj, enabled)
 	if guiObj:IsA("TextButton") then
 		guiObj.Active = enabled
 		guiObj.AutoButtonColor = enabled
-		guiObj.BackgroundColor3 = enabled and Color3.fromRGB(44, 44, 54) or Color3.fromRGB(32, 32, 38)
+		if enabled then
+			if guiObj == pushBtn then
+				guiObj.BackgroundColor3 = Color3.fromRGB(60, 140, 85)
+			elseif guiObj == pullBtn then
+				guiObj.BackgroundColor3 = Color3.fromRGB(160, 70, 70)
+			else
+				guiObj.BackgroundColor3 = Color3.fromRGB(44, 44, 54)
+			end
+		else
+			guiObj.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
+		end
 		guiObj.TextColor3 = enabled and Color3.fromRGB(245, 245, 250) or Color3.fromRGB(140, 140, 150)
 	elseif guiObj:IsA("TextBox") then
 		guiObj.TextEditable = enabled
@@ -284,7 +319,7 @@ local function cancelJob()
 	currentJob += 1
 	isBusy = false
 	setBusy(false)
-	wantedStatus = "canceled"
+	setStatus("canceled", "error")
 end
 
 cancelBtn.MouseButton1Click:Connect(cancelJob)
@@ -412,13 +447,13 @@ local function rebuildIndex(prefix, jobId)
 
 	ensureRootWatchers()
 
-	wantedStatus = "scanning studio..."
+	setStatus("scanning studio...", "progress")
 	local scanned = 0
 
 	local function onProgress(count)
 		scanned = count
 		if (count % 25) == 0 then
-			wantedStatus = ("scanning studio... (%d)"):format(count)
+			setStatus(("scanning studio... (%d)"):format(count), "progress")
 		end
 	end
 
@@ -439,7 +474,7 @@ end
 
 local function refreshDirty(jobId)
 	if next(sourceIndex.dirty) == nil then return true end
-	wantedStatus = "updating changed scripts..."
+	setStatus("updating changed scripts...", "progress")
 	local refreshed = 0
 	for inst, _ in pairs(sourceIndex.dirty) do
 		if isCanceled(jobId) then return false, "canceled" end
@@ -488,6 +523,9 @@ local function doPush(cfg, jobId)
 	if not okDirty then return false, errDirty end
 
 	local cache = loadCache(cfg)
+	if next(cache) == nil then
+		return false, "please pull once to sync baseline"
+	end
 	local changed = {}
 	local cacheNext = {}
 
@@ -528,7 +566,7 @@ local function doPush(cfg, jobId)
 		return true, ("no changes (%d scripts scanned)"):format(totalLocal)
 	end
 
-	wantedStatus = ("getting head commit (%d changed)..."):format(changedCount)
+	setStatus(("getting head commit (%d changed)..."):format(changedCount), "progress")
 	local headCommitSha, err1 = GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
 	if not headCommitSha then return false, err1 end
 	if isCanceled(jobId) then return false, "canceled" end
@@ -537,7 +575,7 @@ local function doPush(cfg, jobId)
 	if not baseTreeSha then return false, err2 end
 	if isCanceled(jobId) then return false, "canceled" end
 
-	wantedStatus = "batch committing..."
+	setStatus("batch committing...", "progress")
 	local ok, msgOrErr = GitHub.batchCommit(
 		cfg.owner,
 		cfg.repo,
@@ -574,7 +612,7 @@ local function doPull(cfg, jobId)
 
 	saveUi(cfg)
 
-	wantedStatus = "getting head commit..."
+	setStatus("getting head commit...", "progress")
 	local headCommitSha, err1 = GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
 	if not headCommitSha then return false, err1 end
 	if isCanceled(jobId) then return false, "canceled" end
@@ -583,7 +621,7 @@ local function doPull(cfg, jobId)
 	if not treeSha then return false, err2 end
 	if isCanceled(jobId) then return false, "canceled" end
 
-	wantedStatus = "listing files..."
+	setStatus("listing files...", "progress")
 	local tree, err3 = GitHub.getTreeRecursive(cfg.owner, cfg.repo, treeSha, cfg.token)
 	if not tree then return false, err3 end
 	if isCanceled(jobId) then return false, "canceled" end
@@ -633,7 +671,7 @@ local function doPull(cfg, jobId)
 		--quiet
 	end
 
-	wantedStatus = ("downloading %d files (raw github)..."):format(#toDownload)
+	setStatus(("downloading %d files (raw github)..."):format(#toDownload), "progress")
 
 	local function dl(item, idx, throttle)
 		if isCanceled(jobId) then return nil end
@@ -663,7 +701,7 @@ local function doPull(cfg, jobId)
 		local now = os.clock()
 		if (now - lastProgAt) > 0.12 or done == total then
 			lastProgAt = now
-			wantedStatus = ("downloading %d/%d..."):format(done, total)
+			setStatus(("downloading %d/%d..."):format(done, total), "progress")
 		end
 	end
 
@@ -675,7 +713,7 @@ local function doPull(cfg, jobId)
 	if #errors > 0 then
 		return false, tostring(errors[1].err)
 	end
-	wantedStatus = "applying to studio..."
+	setStatus("applying to studio...", "progress")
 
 	local applied = 0
 	for i, item in ipairs(results) do
@@ -729,7 +767,7 @@ end
 local function runJob(fn)
 	if isBusy then return end
 	setBusy(true)
-	wantedStatus = "starting..."
+	setStatus("starting...", "progress")
 	currentJob += 1
 	local jobId = currentJob
 
@@ -738,13 +776,13 @@ local function runJob(fn)
 		local ok, success, msg = pcall(fn, cfg, jobId)
 		if not isCanceled(jobId) then
 			if not ok then
-				wantedStatus = "error: " .. tostring(success)
+				setStatus("error: " .. tostring(success), "error")
 				warn(tostring(success))
 			elseif not success then
-				wantedStatus = "fail: " .. tostring(msg)
+				setStatus("fail: " .. tostring(msg), "error")
 				warn(tostring(msg))
 			else
-				wantedStatus = tostring(msg)
+				setStatus(tostring(msg), "success")
 			end
 			setBusy(false)
 		end
@@ -753,7 +791,7 @@ local function runJob(fn)
 	task.delay(300, function()
 		if not isCanceled(jobId) and isBusy then
 			cancelJob()
-			wantedStatus = "timeout"
+			setStatus("timeout", "error")
 			warn("timeout")
 		end
 	end)
@@ -781,4 +819,4 @@ do
 end
 
 setBusy(false)
-wantedStatus = "ready (fast batch mode)"
+setStatus("ready (fast batch mode)", "progress")
