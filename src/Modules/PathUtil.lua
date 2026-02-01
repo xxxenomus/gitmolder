@@ -89,7 +89,11 @@ local defaultRoots = {
 	"SoundService",
 }
 
-local function collectLuaSources(prefix, rootsOverride)
+local function getDefaultRoots()
+	return defaultRoots
+end
+
+local function collectLuaSources(prefix, rootsOverride, onProgress, isCanceled)
 	local roots = {}
 	local list = rootsOverride or defaultRoots
 	for _, svcName in ipairs(list) do
@@ -100,7 +104,11 @@ local function collectLuaSources(prefix, rootsOverride)
 	end
 
 	local out = {}
+	local scanned = 0
 	for _, root in ipairs(roots) do
+		if isCanceled and isCanceled() then
+			return out, true
+		end
 		if root:IsA("LuaSourceContainer") then
 			local ok, src = pcall(function() return root.Source end)
 			if ok and type(src) == "string" then
@@ -109,9 +117,14 @@ local function collectLuaSources(prefix, rootsOverride)
 					out[path] = { inst = root, source = src }
 				end
 			end
+			scanned += 1
+			if onProgress then onProgress(scanned) end
 		end
 
 		for _, inst in ipairs(root:GetDescendants()) do
+			if isCanceled and isCanceled() then
+				return out, true
+			end
 			if inst:IsA("LuaSourceContainer") then
 				local ok, src = pcall(function() return inst.Source end)
 				if ok and type(src) == "string" then
@@ -120,11 +133,48 @@ local function collectLuaSources(prefix, rootsOverride)
 						out[path] = { inst = inst, source = src }
 					end
 				end
+				scanned += 1
+				if onProgress then onProgress(scanned) end
 			end
 		end
 	end
 
-	return out
+	return out, false
+end
+
+local function findScriptByPath(path, prefix)
+	local pfx = prefix or ""
+	if pfx ~= "" and pfx:sub(-1) ~= "/" then pfx = pfx .. "/" end
+	if pfx ~= "" then
+		if path:sub(1, #pfx) ~= pfx then return nil end
+		path = path:sub(#pfx + 1)
+	end
+
+	local parts = {}
+	for part in path:gmatch("[^/]+") do
+		table.insert(parts, part)
+	end
+
+	if #parts < 2 then return nil end
+	local svc = getService(parts[1])
+	if not svc then return nil end
+
+	local parent = svc
+	for i = 2, #parts - 1 do
+		local child = parent:FindFirstChild(parts[i])
+		if not child or not child:IsA("Folder") then return nil end
+		parent = child
+	end
+
+	local fileName = parts[#parts]
+	local name, className = stripSuffix(fileName)
+	if not name or not className then return nil end
+
+	local inst = parent:FindFirstChild(name)
+	if inst and inst.ClassName == className then
+		return inst
+	end
+	return nil
 end
 
 return {
@@ -134,4 +184,6 @@ return {
 	ensureFolder = ensureFolder,
 	ensureScript = ensureScript,
 	collectLuaSources = collectLuaSources,
+	findScriptByPath = findScriptByPath,
+	getDefaultRoots = getDefaultRoots,
 }

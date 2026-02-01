@@ -4,7 +4,7 @@ local RunService = game:GetService("RunService")
 local modules = script.Parent:WaitForChild("Modules")
 local GitHub = require(modules.Github)
 local PathUtil = require(modules.PathUtil)
-local WorkerPool = require(modules.WorkerPool)
+local Concurrent = require(modules.Concurrent)
 local Hash = require(modules.Hash)
 
 local isBusy = false
@@ -122,6 +122,37 @@ statusLbl.TextColor3 = Color3.fromRGB(170, 170, 180)
 statusLbl.Text = "ready"
 statusLbl.Parent = root
 
+y += 24
+
+local progressBack = Instance.new("Frame")
+progressBack.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+progressBack.BorderSizePixel = 0
+progressBack.Size = UDim2.new(1, -pad * 2, 0, 6)
+progressBack.Position = UDim2.fromOffset(pad, y)
+progressBack.Parent = root
+
+local progressFill = Instance.new("Frame")
+progressFill.BackgroundColor3 = Color3.fromRGB(80, 170, 255)
+progressFill.BorderSizePixel = 0
+progressFill.Size = UDim2.new(0, 0, 1, 0)
+progressFill.Parent = progressBack
+
+y += 12
+
+local logFrame = Instance.new("ScrollingFrame")
+logFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+logFrame.BorderSizePixel = 0
+logFrame.Position = UDim2.fromOffset(pad, y)
+logFrame.Size = UDim2.new(1, -pad * 2, 1, -(y + pad))
+logFrame.ScrollBarThickness = 6
+logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+logFrame.Parent = root
+
+local logLayout = Instance.new("UIListLayout")
+logLayout.Padding = UDim.new(0, 2)
+logLayout.SortOrder = Enum.SortOrder.LayoutOrder
+logLayout.Parent = logFrame
+
 --im updating status on heartbeat so parallel tasks dont fight each other
 RunService.Heartbeat:Connect(function()
 	if statusLbl.Text ~= wantedStatus then
@@ -131,6 +162,64 @@ end)
 
 local function trim(s)
 	return (tostring(s or ""):gsub("^%s*(.-)%s*$", "%1"))
+end
+
+local logLines = {}
+local maxLogLines = 200
+
+local function setProgress(done, total)
+	if total == nil or total <= 0 then
+		progressFill.Size = UDim2.new(0, 0, 1, 0)
+		return
+	end
+	local pct = math.clamp(done / total, 0, 1)
+	progressFill.Size = UDim2.new(pct, 0, 1, 0)
+end
+
+local function logLine(text, isError)
+	local ts = ""
+	local ok, stamp = pcall(function()
+		return os.date("%H:%M:%S")
+	end)
+	if ok and stamp then
+		ts = "[" .. stamp .. "] "
+	end
+
+	local lbl = Instance.new("TextLabel")
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.new(1, -6, 0, 16)
+	lbl.Font = Enum.Font.GothamMono
+	lbl.TextSize = 12
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.TextColor3 = isError and Color3.fromRGB(255, 120, 120) or Color3.fromRGB(190, 190, 200)
+	lbl.Text = ts .. text
+	lbl.Parent = logFrame
+
+	table.insert(logLines, lbl)
+	if #logLines > maxLogLines then
+		logLines[1]:Destroy()
+		table.remove(logLines, 1)
+	end
+
+	logFrame.CanvasSize = UDim2.new(0, 0, 0, logLayout.AbsoluteContentSize.Y + 4)
+	logFrame.CanvasPosition = Vector2.new(0, math.max(0, logLayout.AbsoluteContentSize.Y - logFrame.AbsoluteSize.Y))
+
+	if isError then
+		warn(text)
+	else
+		print(text)
+	end
+end
+
+local function getCacheEntry(cache, path)
+	local v = cache[path]
+	if type(v) == "table" then return v end
+	if type(v) == "number" then return { hash = v } end
+	return nil
+end
+
+local function setCacheEntry(cache, path, hash, sha)
+	cache[path] = { hash = hash, sha = sha }
 end
 
 local function settingsKey(cfg)
@@ -217,12 +306,193 @@ local function cancelJob()
 	isBusy = false
 	setBusy(false)
 	wantedStatus = "canceled"
+	setProgress(0, 0)
+	logLine("job: canceled", true)
 end
 
 cancelBtn.MouseButton1Click:Connect(cancelJob)
 
 local function isCanceled(jobId)
 	return currentJob ~= jobId
+end
+
+local sourceIndex = {
+	prefix = nil,
+	byInst = {},
+	byPath = {},
+	dirty = {},
+	conns = {},
+	rootConns = {},
+	initialized = false,
+}
+
+local function disconnectInst(inst)
+	local conns = sourceIndex.conns[inst]
+	if conns then
+		for _, c in ipairs(conns) do
+			c:Disconnect()
+		end
+	end
+	sourceIndex.conns[inst] = nil
+end
+
+local function removeInst(inst)
+	local data = sourceIndex.byInst[inst]
+	if data then
+		if data.path then
+			sourceIndex.byPath[data.path] = nil
+		end
+		sourceIndex.byInst[inst] = nil
+	end
+	sourceIndex.dirty[inst] = nil
+	disconnectInst(inst)
+end
+
+local function updatePath(inst)
+	local data = sourceIndex.byInst[inst]
+	if not data then return end
+	local newPath = PathUtil.buildRepoPath(inst, sourceIndex.prefix)
+	if data.path ~= newPath then
+		if data.path then
+			sourceIndex.byPath[data.path] = nil
+		end
+		data.path = newPath
+		if newPath then
+			sourceIndex.byPath[newPath] = inst
+		end
+	end
+end
+
+local function markDirty(inst)
+	sourceIndex.dirty[inst] = true
+end
+
+local function trackInst(inst, sourceOpt)
+	if not inst:IsA("LuaSourceContainer") then return end
+	if sourceIndex.byInst[inst] then
+		if sourceOpt ~= nil then
+			local data = sourceIndex.byInst[inst]
+			data.source = sourceOpt
+			data.hash = Hash.fnv1a32(sourceOpt)
+		end
+		return
+	end
+
+	local src = sourceOpt
+	if src == nil then
+		local ok, s = pcall(function() return inst.Source end)
+		if ok and type(s) == "string" then
+			src = s
+		end
+	end
+	if src == nil then return end
+
+	local path = PathUtil.buildRepoPath(inst, sourceIndex.prefix)
+	sourceIndex.byInst[inst] = { inst = inst, source = src, hash = Hash.fnv1a32(src), path = path }
+	if path then
+		sourceIndex.byPath[path] = inst
+	end
+
+	local conns = {}
+	table.insert(conns, inst:GetPropertyChangedSignal("Source"):Connect(function()
+		markDirty(inst)
+	end))
+	table.insert(conns, inst:GetPropertyChangedSignal("Name"):Connect(function()
+		updatePath(inst)
+		markDirty(inst)
+	end))
+	table.insert(conns, inst.AncestryChanged:Connect(function()
+		if inst:IsDescendantOf(game) then
+			updatePath(inst)
+		else
+			removeInst(inst)
+		end
+	end))
+	sourceIndex.conns[inst] = conns
+end
+
+local function ensureRootWatchers()
+	if sourceIndex.rootConns and #sourceIndex.rootConns > 0 then return end
+	local roots = PathUtil.getDefaultRoots()
+	for _, svcName in ipairs(roots) do
+		local svc = PathUtil.getService(svcName)
+		if svc then
+			table.insert(sourceIndex.rootConns, svc.DescendantAdded:Connect(function(inst)
+				trackInst(inst)
+			end))
+			table.insert(sourceIndex.rootConns, svc.DescendantRemoving:Connect(function(inst)
+				removeInst(inst)
+			end))
+		end
+	end
+end
+
+local function rebuildIndex(prefix, jobId)
+	sourceIndex.prefix = prefix or ""
+	sourceIndex.byInst = {}
+	sourceIndex.byPath = {}
+	sourceIndex.dirty = {}
+
+	ensureRootWatchers()
+
+	wantedStatus = "scanning studio..."
+	setProgress(0, 0)
+	logLine("scan: start")
+	local t0 = os.clock()
+	local scanned = 0
+
+	local function onProgress(count)
+		scanned = count
+		if (count % 25) == 0 then
+			wantedStatus = ("scanning studio... (%d)"):format(count)
+		end
+	end
+
+	local sources, canceled = PathUtil.collectLuaSources(sourceIndex.prefix, nil, onProgress, function()
+		return isCanceled(jobId)
+	end)
+	if canceled then
+		return false, "canceled"
+	end
+
+	for _, item in pairs(sources) do
+		trackInst(item.inst, item.source)
+	end
+
+	sourceIndex.initialized = true
+	logLine(("scan: %d scripts in %.2fs"):format(scanned, os.clock() - t0))
+	return true
+end
+
+local function refreshDirty(jobId)
+	if next(sourceIndex.dirty) == nil then return true end
+	wantedStatus = "updating changed scripts..."
+	local t0 = os.clock()
+	local refreshed = 0
+	for inst, _ in pairs(sourceIndex.dirty) do
+		if isCanceled(jobId) then return false, "canceled" end
+		if inst and inst:IsDescendantOf(game) and inst:IsA("LuaSourceContainer") then
+			local ok, src = pcall(function() return inst.Source end)
+			if ok and type(src) == "string" then
+				local data = sourceIndex.byInst[inst]
+				if data then
+					data.source = src
+					data.hash = Hash.fnv1a32(src)
+					updatePath(inst)
+					refreshed += 1
+				else
+					trackInst(inst, src)
+				end
+			else
+				removeInst(inst)
+			end
+		else
+			removeInst(inst)
+		end
+	end
+	sourceIndex.dirty = {}
+	logLine(("dirty refresh: %d in %.2fs"):format(refreshed, os.clock() - t0))
+	return true
 end
 
 local function doPush(cfg, jobId)
@@ -235,10 +505,13 @@ local function doPush(cfg, jobId)
 
 	saveUi(cfg)
 
-	wantedStatus = "scanning studio..."
-	local sources = PathUtil.collectLuaSources(cfg.prefix)
+	if (not sourceIndex.initialized) or (sourceIndex.prefix ~= (cfg.prefix or "")) then
+		local ok, err = rebuildIndex(cfg.prefix, jobId)
+		if not ok then return false, err end
+	end
 
-	if isCanceled(jobId) then return false, "canceled" end
+	local okDirty, errDirty = refreshDirty(jobId)
+	if not okDirty then return false, errDirty end
 
 	local cache = loadCache(cfg)
 	local changed = {}
@@ -247,18 +520,26 @@ local function doPush(cfg, jobId)
 	local totalLocal = 0
 	local changedCount = 0
 
-	for path, item in pairs(sources) do
-		totalLocal += 1
-		local h = Hash.fnv1a32(item.source)
-		cacheNext[path] = h
-		if cache[path] ~= h then
+	for _, data in pairs(sourceIndex.byInst) do
+		if data.path and data.source then
+			totalLocal += 1
+			local h = data.hash or Hash.fnv1a32(data.source)
+			local cached = getCacheEntry(cache, data.path)
+			local cachedHash = cached and cached.hash or nil
+			if cached and cachedHash == h then
+				setCacheEntry(cacheNext, data.path, h, cached.sha)
+			else
+				setCacheEntry(cacheNext, data.path, h, nil)
+			end
+			if cachedHash ~= h then
 			changedCount += 1
 			table.insert(changed, {
-				path = path,
+				path = data.path,
 				mode = "100644",
 				type = "blob",
-				content = item.source,
+				content = data.source,
 			})
+			end
 		end
 	end
 
@@ -274,6 +555,7 @@ local function doPush(cfg, jobId)
 	end
 
 	wantedStatus = ("getting head commit (%d changed)..."):format(changedCount)
+	logLine(("push: %d changed, %d total"):format(changedCount, totalLocal))
 
 	local headCommitSha, err1 = GitHub.getRefCommitSha(cfg.owner, cfg.repo, cfg.branch, cfg.token)
 	if not headCommitSha then return false, err1 end
@@ -338,7 +620,7 @@ local function doPull(cfg, jobId)
 	for _, item in ipairs(tree) do
 		if item.type == "blob" and item.path:sub(-4) == ".lua" then
 			if prefix == "" or item.path:sub(1, #prefix) == prefix then
-				table.insert(files, item.path)
+				table.insert(files, { path = item.path, sha = item.sha })
 			end
 		end
 	end
@@ -347,24 +629,61 @@ local function doPull(cfg, jobId)
 		return false, "no lua files found"
 	end
 
-	wantedStatus = ("downloading %d files (raw github)..."):format(#files)
-
 	local cache = loadCache(cfg)
 	local cacheNext = {}
 
-	local function dl(path, idx)
+	local toDownload = {}
+	local skipped = 0
+	for _, item in ipairs(files) do
+		local cached = getCacheEntry(cache, item.path)
+		if cached and cached.sha and cached.sha == item.sha then
+			local inst = PathUtil.findScriptByPath(item.path, prefix)
+			if inst then
+				local ok, src = pcall(function() return inst.Source end)
+				if ok and type(src) == "string" and cached.hash and Hash.fnv1a32(src) == cached.hash then
+					setCacheEntry(cacheNext, item.path, cached.hash, cached.sha)
+					skipped += 1
+				else
+					table.insert(toDownload, item)
+				end
+			else
+				table.insert(toDownload, item)
+			end
+		else
+			table.insert(toDownload, item)
+		end
+	end
+
+	if skipped > 0 then
+		logLine(("pull: skipping %d unchanged files"):format(skipped))
+	end
+
+	wantedStatus = ("downloading %d files (raw github)..."):format(#toDownload)
+	logLine(("pull: downloading %d files"):format(#toDownload))
+	setProgress(0, #toDownload)
+	local tDownload = os.clock()
+
+	local function dl(item, idx, throttle)
 		if isCanceled(jobId) then return nil end
 		local body = nil
-
-		local rawBody = GitHub.downloadRaw(cfg.owner, cfg.repo, cfg.branch, path, cfg.token)
-		if rawBody then
-			body = rawBody
-		else
-			--if raw fails (private weirdness), i bail with error so i notice fast
-			error("download failed: " .. path)
+		local lastErr = nil
+		for attempt = 1, 3 do
+			if throttle then throttle() end
+			local rawBody, err = GitHub.downloadRaw(cfg.owner, cfg.repo, cfg.branch, item.path, cfg.token)
+			if rawBody then
+				body = rawBody
+				lastErr = nil
+				break
+			end
+			lastErr = err or "download failed"
+			task.wait(0.15 * attempt)
 		end
 
-		return { path = path, content = body }
+		if not body then
+			error(("download failed: %s (%s)"):format(item.path, tostring(lastErr)))
+		end
+
+		return { path = item.path, content = body, sha = item.sha }
 	end
 
 	local lastProgAt = 0
@@ -373,10 +692,11 @@ local function doPull(cfg, jobId)
 		if (now - lastProgAt) > 0.12 or done == total then
 			lastProgAt = now
 			wantedStatus = ("downloading %d/%d..."):format(done, total)
+			setProgress(done, total)
 		end
 	end
 
-	local errors, results = WorkerPool.run(files, 10, dl, onProgress, function()
+	local errors, results = Concurrent.run(toDownload, 6, dl, onProgress, function()
 		return isCanceled(jobId)
 	end)
 
@@ -384,11 +704,14 @@ local function doPull(cfg, jobId)
 	if #errors > 0 then
 		return false, tostring(errors[1].err)
 	end
+	logLine(("download: %d files in %.2fs"):format(#results, os.clock() - tDownload))
 
 	wantedStatus = "applying to studio..."
+	setProgress(0, #results)
 
 	local applied = 0
-	for _, item in ipairs(results) do
+	local tApply = os.clock()
+	for i, item in ipairs(results) do
 		if isCanceled(jobId) then return false, "canceled" end
 		if item and item.path and item.content then
 			local rel = item.path
@@ -413,16 +736,30 @@ local function doPull(cfg, jobId)
 					local name, className = PathUtil.stripSuffix(fileName)
 					if name and className then
 						local scr = PathUtil.ensureScript(parent, name, className)
-						scr.Source = item.content
+						local newHash = Hash.fnv1a32(item.content)
+						local needsWrite = true
+						local ok, cur = pcall(function() return scr.Source end)
+						if ok and type(cur) == "string" then
+							if Hash.fnv1a32(cur) == newHash then
+								needsWrite = false
+							end
+						end
+						if needsWrite then
+							scr.Source = item.content
+						end
 						applied += 1
-						cacheNext[item.path] = Hash.fnv1a32(item.content)
+						setCacheEntry(cacheNext, item.path, newHash, item.sha)
 					end
 				end
 			end
 		end
+		if i % 10 == 0 or i == #results then
+			setProgress(i, #results)
+		end
 	end
 
 	saveCache(cfg, cacheNext)
+	logLine(("apply: %d files in %.2fs"):format(applied, os.clock() - tApply))
 	return true, ("pulled %d files"):format(applied)
 end
 
@@ -434,18 +771,23 @@ local function runJob(fn)
 	local jobId = currentJob
 
 	local cfg = readCfg()
+	logLine("job: start")
 
 	task.spawn(function()
 		local ok, success, msg = pcall(fn, cfg, jobId)
 		if not isCanceled(jobId) then
 			if not ok then
 				wantedStatus = "error: " .. tostring(success)
+				logLine("job: error - " .. tostring(success), true)
 			elseif not success then
 				wantedStatus = "fail: " .. tostring(msg)
+				logLine("job: fail - " .. tostring(msg), true)
 			else
 				wantedStatus = tostring(msg)
+				logLine("job: done - " .. tostring(msg))
 			end
 			setBusy(false)
+			setProgress(0, 0)
 		end
 	end)
 
@@ -453,6 +795,7 @@ local function runJob(fn)
 		if not isCanceled(jobId) and isBusy then
 			cancelJob()
 			wantedStatus = "timeout"
+			logLine("job: timeout", true)
 		end
 	end)
 end
