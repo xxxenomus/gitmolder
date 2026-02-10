@@ -15,6 +15,12 @@ local currentJob = 0
 local wantedStatus = "ready"
 local wantedStatusColor = Color3.fromRGB(170, 170, 180)
 local lastPushDuration = 0
+local TOKEN_MASK = "*****"
+local tokenValue = ""
+local TOKEN_STORE_KEY = "gitmolderTokenProfiles"
+local tokenProfiles = {}
+local tokenProfileOrder = {}
+local selectedTokenName = nil
 
 --ui
 local toolbar = plugin:CreateToolbar("Gitmolder")
@@ -29,7 +35,7 @@ settingsBtn.Click:Connect(function()
 	settingsWidget.Enabled = not settingsWidget.Enabled
 end)
 
-local gitInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, false, 420, 220, 360, 200)
+local gitInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, true, 420, 220, 360, 200)
 local gitWidget = plugin:CreateDockWidgetPluginGui("GitmolderMainWidget", gitInfo)
 gitWidget.Title = "Gitmolder"
 gitWidget.Enabled = false
@@ -124,8 +130,14 @@ local repoBox = mkLabeledBox(settingsFrame, "repo", "xenomus-dev", false)
 local branchBox = mkLabeledBox(settingsFrame, "branch", "main", false)
 local prefixBox = mkLabeledBox(settingsFrame, "prefix (optional)", "portfolio/", false)
 local tokenBox = mkLabeledBox(settingsFrame, "token (needs repo access)", "ghp_...", true)
+local tokenNameBox = mkLabeledBox(settingsFrame, "token name", "main-account", false)
 
 local msgBox = mkLabeledBox(gitFrame, "commit msg", "sync from studio", false)
+
+local tokenSelectRow = Instance.new("Frame")
+tokenSelectRow.BackgroundTransparency = 1
+tokenSelectRow.Size = UDim2.new(1, 0, 0, 28)
+tokenSelectRow.Parent = gitFrame
 
 local primaryRow = Instance.new("Frame")
 primaryRow.BackgroundTransparency = 1
@@ -158,6 +170,13 @@ local function mkBtn(parent, text)
 	return btn
 end
 
+local saveTokenBtn = mkBtn(settingsFrame, "save named token")
+saveTokenBtn.Size = UDim2.new(1, 0, 0, 28)
+saveTokenBtn.BackgroundColor3 = Color3.fromRGB(70, 110, 170)
+
+local tokenSelectBtn = mkBtn(tokenSelectRow, "token: manual")
+tokenSelectBtn.Size = UDim2.new(1, 0, 0, 28)
+
 local pushBtn = mkBtn(primaryRow, "push")
 local cancelBtn = mkBtn(cancelRow, "cancel")
 
@@ -187,7 +206,175 @@ local function trim(s)
 	return (tostring(s or ""):gsub("^%s*(.-)%s*$", "%1"))
 end
 
-local function setStatus(text, kind)
+local function hasTokenProfileName(name)
+	for _, n in ipairs(tokenProfileOrder) do
+		if n == name then
+			return true
+		end
+	end
+	return false
+end
+
+local function saveTokenProfiles()
+	local payload = {
+		order = {},
+		items = {},
+	}
+
+	for _, name in ipairs(tokenProfileOrder) do
+		local tok = tokenProfiles[name]
+		if type(name) == "string" and name ~= "" and type(tok) == "string" and tok ~= "" then
+			table.insert(payload.order, name)
+			payload.items[name] = tok
+		end
+	end
+
+	pcall(function()
+		plugin:SetSetting(TOKEN_STORE_KEY, payload)
+	end)
+end
+
+local function loadTokenProfiles()
+	tokenProfiles = {}
+	tokenProfileOrder = {}
+
+	local ok, data = pcall(function()
+		return plugin:GetSetting(TOKEN_STORE_KEY)
+	end)
+	if not ok or type(data) ~= "table" then
+		return
+	end
+
+	local items = type(data.items) == "table" and data.items or {}
+	if type(data.order) == "table" then
+		for _, name in ipairs(data.order) do
+			local tok = items[name]
+			if type(name) == "string" and name ~= "" and type(tok) == "string" and tok ~= "" then
+				tokenProfiles[name] = tok
+				table.insert(tokenProfileOrder, name)
+			end
+		end
+	end
+
+	for name, tok in pairs(items) do
+		if type(name) == "string" and name ~= "" and type(tok) == "string" and tok ~= "" and not hasTokenProfileName(name) then
+			tokenProfiles[name] = tok
+			table.insert(tokenProfileOrder, name)
+		end
+	end
+end
+
+local function updateTokenSelectButton()
+	if selectedTokenName and tokenProfiles[selectedTokenName] then
+		tokenSelectBtn.Text = ("token: %s"):format(selectedTokenName)
+	else
+		tokenSelectBtn.Text = "token: manual"
+	end
+end
+
+local function persistSelectedTokenName()
+	pcall(function()
+		local existing = plugin:GetSetting("gitmolderUi")
+		local ui = type(existing) == "table" and existing or {}
+		ui.selectedToken = selectedTokenName
+		plugin:SetSetting("gitmolderUi", ui)
+	end)
+end
+
+local setStatus
+
+local function refreshTokenBox()
+	if tokenValue ~= "" then
+		tokenBox.Text = TOKEN_MASK
+	else
+		tokenBox.Text = ""
+	end
+end
+
+tokenBox.Focused:Connect(function()
+	if isBusy then return end
+	tokenBox.Text = ""
+end)
+
+tokenBox.FocusLost:Connect(function()
+	local typed = trim(tokenBox.Text)
+	if typed ~= "" and typed ~= TOKEN_MASK then
+		tokenValue = typed
+	end
+	refreshTokenBox()
+end)
+
+saveTokenBtn.MouseButton1Click:Connect(function()
+	if isBusy then return end
+
+	local typed = trim(tokenBox.Text)
+	if typed ~= "" and typed ~= TOKEN_MASK then
+		tokenValue = typed
+	end
+
+	local profileName = trim(tokenNameBox.Text)
+	local tok = trim(tokenValue)
+	if profileName == "" then
+		setStatus("enter token name first", "error")
+		return
+	end
+	if tok == "" then
+		setStatus("enter token first", "error")
+		return
+	end
+
+	if not hasTokenProfileName(profileName) then
+		table.insert(tokenProfileOrder, profileName)
+	end
+	tokenProfiles[profileName] = tok
+	selectedTokenName = profileName
+	saveTokenProfiles()
+	updateTokenSelectButton()
+	persistSelectedTokenName()
+	refreshTokenBox()
+	setStatus(("saved token '%s'"):format(profileName), "success")
+end)
+
+tokenSelectBtn.MouseButton1Click:Connect(function()
+	if isBusy then return end
+
+	if #tokenProfileOrder == 0 then
+		selectedTokenName = nil
+		updateTokenSelectButton()
+		setStatus("no saved tokens (using manual)", "error")
+		return
+	end
+
+	if selectedTokenName == nil then
+		selectedTokenName = tokenProfileOrder[1]
+	else
+		local idx = nil
+		for i, name in ipairs(tokenProfileOrder) do
+			if name == selectedTokenName then
+				idx = i
+				break
+			end
+		end
+
+		if idx == nil then
+			selectedTokenName = tokenProfileOrder[1]
+		elseif idx < #tokenProfileOrder then
+			selectedTokenName = tokenProfileOrder[idx + 1]
+		else
+			selectedTokenName = nil
+		end
+	end
+
+	updateTokenSelectButton()
+	persistSelectedTokenName()
+	if selectedTokenName then
+		setStatus(("selected token '%s'"):format(selectedTokenName), "progress")
+	else
+		setStatus("selected manual token", "progress")
+	end
+end)
+
+setStatus = function(text, kind)
 	wantedStatus = text
 	if kind == "success" then
 		wantedStatusColor = Color3.fromRGB(120, 220, 140)
@@ -272,23 +459,39 @@ local function setBusy(state)
 	isBusy = state
 
 	setUiEnabled(pushBtn, not state)
+	setUiEnabled(tokenSelectBtn, not state)
 	setUiEnabled(cancelBtn, state)
 	setUiEnabled(ownerBox, not state)
 	setUiEnabled(repoBox, not state)
 	setUiEnabled(branchBox, not state)
 	setUiEnabled(prefixBox, not state)
 	setUiEnabled(tokenBox, not state)
+	setUiEnabled(tokenNameBox, not state)
+	setUiEnabled(saveTokenBtn, not state)
 	setUiEnabled(msgBox, not state)
 end
 
 local function readCfg()
+	local visibleToken = trim(tokenBox.Text)
+	if visibleToken ~= "" and visibleToken ~= TOKEN_MASK then
+		tokenValue = visibleToken
+	end
+
+	local selectedTokenValue = nil
+	if selectedTokenName and tokenProfiles[selectedTokenName] then
+		selectedTokenValue = trim(tokenProfiles[selectedTokenName])
+	end
+
+	local resolvedToken = selectedTokenValue or trim(tokenValue)
+
 	local cfg = {
 		owner = trim(ownerBox.Text),
 		repo = trim(repoBox.Text),
 		branch = trim(branchBox.Text),
 		prefix = trim(prefixBox.Text),
-		token = trim(tokenBox.Text),
+		token = resolvedToken,
 		msg = trim(msgBox.Text),
+		selectedToken = selectedTokenName,
 	}
 	if cfg.branch == "" then cfg.branch = "main" end
 	if cfg.msg == "" then cfg.msg = "sync from studio" end
@@ -784,16 +987,27 @@ end)
 
 --restore ui
 do
+	loadTokenProfiles()
+
 	local saved = loadUi()
 	if saved then
 		ownerBox.Text = saved.owner or ""
 		repoBox.Text = saved.repo or ""
 		branchBox.Text = saved.branch or "main"
 		prefixBox.Text = saved.prefix or ""
-		tokenBox.Text = saved.token or ""
+		tokenValue = trim(saved.token or "")
+		selectedTokenName = trim(saved.selectedToken or "")
+		if selectedTokenName == "" or not tokenProfiles[selectedTokenName] then
+			selectedTokenName = nil
+		end
+		refreshTokenBox()
 		msgBox.Text = saved.msg or "sync from studio"
 	end
+
+	updateTokenSelectButton()
+	refreshTokenBox()
 end
 
 setBusy(false)
+gitWidget.Enabled = true
 setStatus("ready (fast batch mode)", "progress")
