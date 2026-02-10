@@ -5,33 +5,37 @@ local HttpService = game:GetService("HttpService")
 local Base64 = require(script.Parent.Base64)
 
 local GitHub = {}
+local REQUEST_TIMEOUT = 25
+local REQUEST_POLL_INTERVAL = 0.05
 
 local function requestAsync(req)
-	local thread = coroutine.running()
-	
-	local taskThread = task.spawn(function()
-		local ok, res = pcall(function()
+	local done = false
+	local res = nil
+	local reqErr = nil
+
+	task.spawn(function()
+		local ok, response = pcall(function()
 			return HttpService:RequestAsync(req)
 		end)
-		if coroutine.status(thread) == "suspended" then
-			task.spawn(thread, ok, res)
+		if ok then
+			res = response
+		else
+			reqErr = response
 		end
+		done = true
 	end)
 
-	local timeoutTask = task.delay(25, function()
-		task.cancel(taskThread)
-		if coroutine.status(thread) == "suspended" then
-			task.spawn(thread, false, "timeout")
+	local startedAt = os.clock()
+	while not done do
+		if (os.clock() - startedAt) > REQUEST_TIMEOUT then
+			return nil, "timeout"
 		end
-	end)
-
-	local ok, res = coroutine.yield()
-	if timeoutTask then task.cancel(timeoutTask) end
-
-	if not ok then
-		return nil, tostring(res)
+		task.wait(REQUEST_POLL_INTERVAL)
 	end
 
+	if not res then
+		return nil, tostring(reqErr)
+	end
 	return res, nil
 end
 

@@ -8,7 +8,6 @@ local HttpService = game:GetService("HttpService")
 local modules = script.Parent:WaitForChild("Modules")
 local GitHub = require(modules.Github)
 local PathUtil = require(modules.PathUtil)
-local Concurrent = require(modules.Concurrent)
 local Hash = require(modules.Hash)
 
 local isBusy = false
@@ -16,7 +15,6 @@ local currentJob = 0
 local wantedStatus = "ready"
 local wantedStatusColor = Color3.fromRGB(170, 170, 180)
 local lastPushDuration = 0
-local lastPutDuration = 0
 
 --ui
 local toolbar = plugin:CreateToolbar("Gitmolder")
@@ -273,6 +271,7 @@ end
 local function setBusy(state)
 	isBusy = state
 
+	setUiEnabled(pushBtn, not state)
 	setUiEnabled(cancelBtn, state)
 	setUiEnabled(ownerBox, not state)
 	setUiEnabled(repoBox, not state)
@@ -522,13 +521,9 @@ local function doPush(cfg, jobId)
 	if not okDirty then return false, errDirty end
 
 	local changed = {}
-	local cacheNext = {}
+	local cacheNext = cache
 
 	local changedCount = 0
-
-	for path, entry in pairs(cache) do
-		cacheNext[path] = entry
-	end
 
 	local meta = cache.__meta or {}
 	cacheNext.__meta = meta
@@ -637,7 +632,7 @@ local function doPush(cfg, jobId)
 					)
 				end)
 			else
-				return false, err or "push failed"
+				setStatus("single-file push failed, trying batch...", "progress")
 			end
 		end
 		if newFileSha then
@@ -653,11 +648,10 @@ local function doPush(cfg, jobId)
 			if putDt and putDt > 5 then
 				perf = (" [put %.1fs]"):format(putDt)
 			end
-			lastPutDuration = putDt or 0
 			lastPushDuration = dt
 			return true, ("pushed %d files (commit %s) (%.1fs)%s"):format(changedCount, tostring(commitSha and commitSha:sub(1, 7) or "unknown"), dt, perf)
 		elseif err then
-			return false, err
+			setStatus("single-file push failed, trying batch...", "progress")
 		end
 	end
 
