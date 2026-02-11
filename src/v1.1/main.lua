@@ -21,6 +21,9 @@ local TOKEN_STORE_KEY = "gitmolderTokenProfiles"
 local tokenProfiles = {}
 local tokenProfileOrder = {}
 local selectedTokenName = nil
+local MAIN_WIDGET_ID = "GitmolderMainWidget_v11"
+local SETTINGS_WIDGET_ID = "GitmolderSettingsWidget_v11"
+local MAIN_WIDGET_AUTOOPEN_KEY = "gitmolderMainAutoOpenDone_v11"
 
 --ui
 local toolbar = plugin:CreateToolbar("Gitmolder")
@@ -28,15 +31,15 @@ local settingsBtn = toolbar:CreateButton("GM settings", "open settings", "")
 local gitBtn = toolbar:CreateButton("Gitmolder", "open gitmolder", "")
 
 local settingsInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, false, 420, 360, 360, 320)
-local settingsWidget = plugin:CreateDockWidgetPluginGui("GitmolderSettingsWidget", settingsInfo)
+local settingsWidget = plugin:CreateDockWidgetPluginGui(SETTINGS_WIDGET_ID, settingsInfo)
 settingsWidget.Title = "GM settings"
 settingsWidget.Enabled = false
 settingsBtn.Click:Connect(function()
 	settingsWidget.Enabled = not settingsWidget.Enabled
 end)
 
-local gitInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, true, 420, 220, 360, 200)
-local gitWidget = plugin:CreateDockWidgetPluginGui("GitmolderMainWidget", gitInfo)
+local gitInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, true, false, 420, 220, 360, 200)
+local gitWidget = plugin:CreateDockWidgetPluginGui(MAIN_WIDGET_ID, gitInfo)
 gitWidget.Title = "Gitmolder"
 gitWidget.Enabled = false
 gitBtn.Click:Connect(function()
@@ -1009,5 +1012,20 @@ do
 end
 
 setBusy(false)
-gitWidget.Enabled = true
+local wasRestored = false
+pcall(function()
+	wasRestored = gitWidget.HostWidgetWasRestored
+end)
+if not wasRestored then
+	local autoOpenDone = false
+	pcall(function()
+		autoOpenDone = plugin:GetSetting(MAIN_WIDGET_AUTOOPEN_KEY) == true
+	end)
+	if not autoOpenDone then
+		gitWidget.Enabled = true
+		pcall(function()
+			plugin:SetSetting(MAIN_WIDGET_AUTOOPEN_KEY, true)
+		end)
+	end
+end
 setStatus("ready (fast batch mode)", "progress")
